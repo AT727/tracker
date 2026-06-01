@@ -1,44 +1,43 @@
+"""Pixel to world coordinate transform (cm, Y-up, no rotation)."""
+
 from __future__ import annotations
-import math
-from typing import Tuple
-from PyQt5.QtCore import QPointF
-from PyQt5.QtWidgets import QGraphicsView
+
+from dataclasses import dataclass
+from typing import Optional
+
+from tracker.calibration.data import CalibrationData
 
 
-def scene_to_viewport(scene_pos: QPointF, view: QGraphicsView) -> QPointF:
-    return view.mapFromScene(scene_pos)
+@dataclass(frozen=True)
+class WorldPoint:
+    x: float
+    y: float
+    calibrated: bool
 
 
-def viewport_to_pixel(vp_pos: QPointF) -> Tuple[int, int]:
-    x = max(0, int(vp_pos.x()))
-    y = max(0, int(vp_pos.y()))
-    return x, y
+class CoordinatePipeline:
+    """Transform raw pixel marks to display/export coordinates."""
 
+    def __init__(self, calibration: Optional[CalibrationData] = None) -> None:
+        self._calibration = calibration or CalibrationData()
 
-def pixel_to_world(px: float, py: float, origin_px: Tuple[float, float],
-                   scale: float, rotation_deg: float) -> Tuple[float, float]:
-    if scale == 0.0:
-        raise ValueError("scale cannot be zero")
-    dx = px - origin_px[0]
-    dy = py - origin_px[1]
-    rad = math.radians(rotation_deg)
-    c = math.cos(rad)
-    s = math.sin(rad)
-    x_world = (dx * c - dy * s) * scale
-    y_world = (dx * s + dy * c) * scale
-    return x_world, y_world
+    @property
+    def calibration(self) -> CalibrationData:
+        return self._calibration
 
+    def set_calibration(self, calibration: CalibrationData) -> None:
+        self._calibration = calibration
 
-def world_to_pixel(x_world: float, y_world: float, origin_px: Tuple[float, float],
-                   scale: float, rotation_deg: float) -> Tuple[float, float]:
-    if scale == 0.0:
-        raise ValueError("scale cannot be zero")
-    rad = math.radians(-rotation_deg)
-    c = math.cos(rad)
-    s = math.sin(rad)
-    inv_scale = 1.0 / scale
-    dx = (x_world * c - y_world * s) * inv_scale
-    dy = (x_world * s + y_world * c) * inv_scale
-    px = dx + origin_px[0]
-    py = dy + origin_px[1]
-    return px, py
+    @property
+    def unit_suffix(self) -> str:
+        return "cm" if self._calibration.is_calibrated else "(px)"
+
+    def pixel_to_world(self, px: float, py: float) -> WorldPoint:
+        if not self._calibration.is_calibrated:
+            return WorldPoint(x=px, y=py, calibrated=False)
+
+        ox, oy = self._calibration.origin_px  # type: ignore[misc]
+        scale = self._calibration.scale_cm_per_px  # type: ignore[assignment]
+        x_cm = (px - ox) * scale
+        y_cm = -(py - oy) * scale
+        return WorldPoint(x=x_cm, y=y_cm, calibrated=True)

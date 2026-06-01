@@ -1,4 +1,4 @@
-from __future__ import annotations
+"""Entry point: python -m tracker"""
 
 import sys
 
@@ -7,13 +7,13 @@ from PyQt5.QtWidgets import QApplication
 from tracker.app.main_window import MainWindow
 
 
-def main():
+def main() -> int:
     app = QApplication(sys.argv)
     app.setApplicationName("Tracker")
     window = MainWindow()
     window.show()
-    sys.exit(app.exec_())
+    return app.exec_()
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

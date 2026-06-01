@@ -1,52 +1,72 @@
+"""Append-only mark collection with point series management."""
+
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Callable, List, Optional, Tuple
 
+from typing import Iterable, Optional
 
-@dataclass
-class TrackedPoint:
-    frame: int
-    timestamp: float
-    x_world: float
-    y_world: float
-    x_pixel: float
-    y_pixel: float
-    track_id: str = "0"
-    is_interpolated: bool = False
+from tracker.tracking.mark import Mark
+from tracker.tracking.series import PointSeries
 
 
 class TrackingCollector:
-    def __init__(self):
-        self._points: List[TrackedPoint] = []
+    def __init__(self) -> None:
+        self._series: dict[str, PointSeries] = {}
+        self._marks: list[Mark] = []
+        self._active_series_id: Optional[str] = None
+        self._ensure_default_series()
 
-    def record(self, frame: int, timestamp: float, x_world: float, y_world: float,
-               x_pixel: float, y_pixel: float, track_id: str = "0") -> TrackedPoint:
-        pt = TrackedPoint(
-            frame=frame, timestamp=timestamp, x_world=x_world, y_world=y_world,
-            x_pixel=x_pixel, y_pixel=y_pixel, track_id=track_id,
-        )
-        self._points.append(pt)
-        return pt
+    def _ensure_default_series(self) -> None:
+        if not self._series:
+            default = PointSeries.create("Series 1")
+            self._series[default.id] = default
+            self._active_series_id = default.id
 
-    def recompute_world_coords(self, pixel_to_world: Callable[[float, float], Tuple[float, float]]):
-        for pt in self._points:
-            pt.x_world, pt.y_world = pixel_to_world(pt.x_pixel, pt.y_pixel)
+    @property
+    def series(self) -> list[PointSeries]:
+        return list(self._series.values())
 
-    def get_by_frame(self, frame: int) -> Optional[TrackedPoint]:
-        for pt in self._points:
-            if pt.frame == frame:
-                return pt
-        return None
+    @property
+    def active_series_id(self) -> Optional[str]:
+        return self._active_series_id
 
-    def all_frames_range(self, total_frames: int) -> List[Optional[TrackedPoint]]:
-        lookup = {pt.frame: pt for pt in self._points}
-        return [lookup.get(i) for i in range(total_frames)]
+    @property
+    def marks(self) -> list[Mark]:
+        return list(self._marks)
 
-    def __len__(self) -> int:
-        return len(self._points)
+    def get_series(self, series_id: str) -> Optional[PointSeries]:
+        return self._series.get(series_id)
 
-    def __getitem__(self, index: int) -> TrackedPoint:
-        return self._points[index]
+    def add_series(self, label: str | None = None, color: str | None = None) -> PointSeries:
+        s = PointSeries.create(label=label, color=color)
+        self._series[s.id] = s
+        self._active_series_id = s.id
+        return s
 
-    def __iter__(self):
-        return iter(self._points)
+    def set_active_series(self, series_id: str) -> None:
+        if series_id not in self._series:
+            raise KeyError(f"Unknown series: {series_id}")
+        self._active_series_id = series_id
+
+    def append_mark(
+        self,
+        frame: int,
+        timestamp_s: float,
+        px: float,
+        py: float,
+        series_id: str | None = None,
+    ) -> Mark:
+        sid = series_id or self._active_series_id
+        if sid is None or sid not in self._series:
+            raise ValueError("No active series")
+        mark = Mark(frame=frame, timestamp_s=timestamp_s, px=px, py=py, series_id=sid)
+        self._marks.append(mark)
+        return mark
+
+    def marks_for_series(self, series_id: str) -> list[Mark]:
+        return [m for m in self._marks if m.series_id == series_id]
+
+    def clear_marks(self) -> None:
+        self._marks.clear()
+
+    def iter_marks(self) -> Iterable[Mark]:
+        return iter(self._marks)
