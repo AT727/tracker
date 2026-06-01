@@ -105,9 +105,15 @@ class ViewportState:
         h_val = 0
         v_val = 0
         if h_enabled:
-            h_val = int(round((self.pan_x - min_px) / (max_px - min_px) * 1000))
+            # Qt's horizontal scrollbar "right" corresponds to larger values, while
+            # in our viewport model larger `pan_x` moves the image right.
+            # Invert the mapping so drag direction matches modern UX.
+            h_val = int(round((max_px - self.pan_x) / (max_px - min_px) * 1000))
         if v_enabled:
-            v_val = int(round((self.pan_y - min_py) / (max_py - min_py) * 1000))
+            # Qt's vertical scrollbar "down" corresponds to smaller values, while
+            # in our viewport model larger `pan_y` moves the image down.
+            # Invert the mapping so drag direction matches modern UX.
+            v_val = int(round((max_py - self.pan_y) / (max_py - min_py) * 1000))
         return h_val, v_val, h_enabled, v_enabled
 
     def pan_from_sliders(
@@ -120,6 +126,8 @@ class ViewportState:
         image_h: float,
     ) -> None:
         min_px, max_px, min_py, max_py = self.pan_range(view_w, view_h, image_w, image_h)
-        pan_x = min_px + (max_px - min_px) * (h_norm / 1000.0)
-        pan_y = min_py + (max_py - min_py) * (v_norm / 1000.0)
+        # Invert horizontal mapping for the scrollbar direction/viewport direction.
+        pan_x = max_px - (max_px - min_px) * (h_norm / 1000.0)
+        # Invert vertical mapping for the scrollbar direction/viewport direction.
+        pan_y = max_py - (max_py - min_py) * (v_norm / 1000.0)
         self.set_pan(pan_x, pan_y, view_w, view_h, image_w, image_h)

@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import (
     QGraphicsItemGroup,
 )
 
-MARK_RED = "#e41a1c"
+MARK_RED = "#ff453a"
 
 
 class FramePixmapItem(QGraphicsPixmapItem):
@@ -28,14 +28,14 @@ class StickOverlay(QGraphicsItemGroup):
     def __init__(self) -> None:
         super().__init__()
         r = self.HANDLE_RADIUS
-        pen = QPen(QColor("#00ff00"), 2)
-        fill = QBrush(QColor("#00ff00"))
+        pen = QPen(QColor("#30d158"), 2)
+        fill = QBrush(QColor("#30d158"))
         self._line = QGraphicsLineItem()
         self._line.setPen(pen)
         self._a = QGraphicsEllipseItem(-r, -r, r * 2, r * 2)
         self._b = QGraphicsEllipseItem(-r, -r, r * 2, r * 2)
         for handle in (self._a, self._b):
-            handle.setPen(QPen(QColor("#004400"), 1))
+            handle.setPen(QPen(QColor("#1c7d32"), 1))
             handle.setBrush(fill)
         self.addToGroup(self._line)
         self.addToGroup(self._a)
@@ -57,7 +57,7 @@ class OriginGridOverlay(QGraphicsItemGroup):
         super().__init__()
         self._lines: list[QGraphicsLineItem] = []
         self._origin_dot = QGraphicsEllipseItem(-5, -5, 10, 10)
-        self._origin_dot.setBrush(QBrush(QColor("#ff4444")))
+        self._origin_dot.setBrush(QBrush(QColor("#ff453a")))
         self._origin_dot.setPen(QPen(Qt.NoPen))
         self.addToGroup(self._origin_dot)
 
@@ -65,7 +65,7 @@ class OriginGridOverlay(QGraphicsItemGroup):
         for line in self._lines:
             self.removeFromGroup(line)
         self._lines.clear()
-        pen = QPen(QColor(255, 255, 255, 80), 1, Qt.DotLine)
+        pen = QPen(QColor(255, 255, 255, 50), 1, Qt.DotLine)
         spacing = self.GRID_SPACING
         x = ox
         while x <= width:

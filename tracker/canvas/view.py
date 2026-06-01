@@ -16,6 +16,8 @@ class CanvasView(QGraphicsView):
     pixel_moved = pyqtSignal(float, float)
     pixel_released = pyqtSignal(float, float)
     viewport_changed = pyqtSignal()
+    key_pressed = pyqtSignal(int, bool)
+    key_released = pyqtSignal(int, bool)
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
@@ -31,6 +33,7 @@ class CanvasView(QGraphicsView):
         self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setBackgroundBrush(Qt.black)
+        self.setFocusPolicy(Qt.StrongFocus)
         self._image_w = 0
         self._image_h = 0
         self._left_down = False
@@ -129,3 +132,11 @@ class CanvasView(QGraphicsView):
 
     def scene_to_pixel(self, scene_x: float, scene_y: float) -> tuple[float, float]:
         return self._viewport.scene_to_pixel(scene_x, scene_y)
+
+    def keyPressEvent(self, event) -> None:
+        self.key_pressed.emit(event.key(), event.isAutoRepeat())
+        super().keyPressEvent(event)
+
+    def keyReleaseEvent(self, event) -> None:
+        self.key_released.emit(event.key(), event.isAutoRepeat())
+        super().keyReleaseEvent(event)

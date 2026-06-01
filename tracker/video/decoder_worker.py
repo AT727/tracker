@@ -25,6 +25,9 @@ class VideoDecoderWorker(QThread):
         self._frame_count = 0
         self._width = 0
         self._height = 0
+        # Tracks the logical frame index corresponding to the last successful decode.
+        # This lets us skip CAP_PROP_POS_FRAMES seeks for sequential forward reads.
+        self._cap_pos_index: int | None = None
         self._cache: FrameCache[tuple[QImage, float]] = FrameCache(max_size=60)
         self._scrub_frame: int | None = None
         self._pending: list[int] = []
@@ -46,6 +49,7 @@ class VideoDecoderWorker(QThread):
             self._pending.clear()
             self._prefetch_pending.clear()
             self._cache.clear()
+            self._cap_pos_index = None
 
     def request_frame(self, index: int) -> None:
         """Queue a frame for step navigation (prev/next, click-advance)."""
@@ -60,13 +64,17 @@ class VideoDecoderWorker(QThread):
         """Jump to a frame; coalesce rapid scrubber moves to the latest index."""
         cached = self._emit_if_cached(index)
         if cached is not None:
+            with QMutexLocker(self._mutex):
+                self._prefetch_pending.clear()
             return
         with QMutexLocker(self._mutex):
             self._scrub_frame = index
             self._pending.clear()
+            self._prefetch_pending.clear()
 
     def prefetch(self, from_index: int, count: int = 5) -> None:
         with QMutexLocker(self._mutex):
+            self._prefetch_pending.clear()
             for i in range(from_index, from_index + count):
                 if i >= self._frame_count:
                     break
@@ -166,22 +174,30 @@ class VideoDecoderWorker(QThread):
         self._width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         self._height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
         self._cache.clear()
+        self._cap_pos_index = None
         self.opened.emit(self._fps, self._frame_count, self._width, self._height)
 
     def _decode_frame(self, index: int) -> tuple[QImage, float] | None:
         if self._cap is None:
             return None
-        self._cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+        if self._cap_pos_index is None:
+            # First decode after open/scrub: seek once.
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+        elif index == self._cap_pos_index + 1:
+            # Sequential forward read: no seek, just read the next frame.
+            pass
+        else:
+            # Non-sequential (seek backward, jumps, etc.): seek.
+            self._cap.set(cv2.CAP_PROP_POS_FRAMES, index)
+
         ok, frame = self._cap.read()
         if not ok or frame is None:
             return None
-        msec = self._cap.get(cv2.CAP_PROP_POS_MSEC)
-        if msec and msec > 0:
-            timestamp_s = msec / 1000.0
-        elif self._fps > 0:
-            timestamp_s = index / self._fps
-        else:
-            timestamp_s = 0.0
+
+        # Use index/fps to avoid an extra CAP_PROP_POS_MSEC get() per frame.
+        timestamp_s = index / self._fps if self._fps > 0 else 0.0
+
+        self._cap_pos_index = index
         rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
         h, w, ch = rgb.shape
         bytes_per_line = ch * w

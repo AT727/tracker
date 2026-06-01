@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QKeySequence, QPixmap, QImage
+from PyQt5.QtCore import QElapsedTimer, Qt, QTimer, QEvent
+from PyQt5.QtGui import QCursor, QKeySequence, QPixmap, QImage
 from PyQt5.QtWidgets import (
     QAction,
     QCheckBox,
@@ -16,6 +16,7 @@ from PyQt5.QtWidgets import (
     QMainWindow,
     QMessageBox,
     QPushButton,
+    QScrollBar,
     QShortcut,
     QSlider,
     QSpinBox,
@@ -27,6 +28,11 @@ from PyQt5.QtWidgets import (
 )
 
 from tracker.calibration.controller import CalibrationController, CalibrationMode
+from tracker.app.autoclicker import (
+    AutoClickerConfigDialog,
+    AutoClickerController,
+    format_mapping_summary,
+)
 from tracker.calibration.data import CalibrationData
 from tracker.calibration.persistence import CalibrationStore, sidecar_path_for_video
 from tracker.canvas.view import CanvasView
@@ -36,6 +42,7 @@ from tracker.panels.data_table import DataTablePanel
 from tracker.panels.plot_panel import PlotPanel
 from tracker.panels.series_toolbar import SeriesToolbar
 from tracker.tracking.collector import TrackingCollector
+from tracker.tracking.mark import Mark
 from tracker.video.decoder_worker import VideoDecoderWorker
 
 
@@ -56,6 +63,12 @@ class MainWindow(QMainWindow):
         self._height = 0
         self._calibration_snapshot: CalibrationData | None = None
         self._syncing_pan_sliders = False
+        self._marks_by_frame: dict[int, list[Mark]] = {}
+        self._plot_refresh_timer = QElapsedTimer()
+        self._plot_refresh_timer.start()
+        self._min_plot_refresh_interval_ms = 200
+        self._autoclicker = AutoClickerController(self)
+        self._autoclicker_enabled_action: QAction | None = None
 
         self._decoder = VideoDecoderWorker()
         self._decoder.opened.connect(self._on_video_opened)
@@ -74,34 +87,42 @@ class MainWindow(QMainWindow):
         self._canvas.pixel_moved.connect(self._on_pixel_moved)
         self._canvas.pixel_released.connect(self._on_pixel_released)
         self._canvas.viewport_changed.connect(self._sync_pan_sliders)
+        self._canvas.key_pressed.connect(self._on_canvas_key_pressed)
+        self._canvas.key_released.connect(self._on_canvas_key_released)
+        self._autoclicker.click_requested.connect(self._on_autoclick_requested)
+        self._autoclicker.enabled_changed.connect(lambda _: self._update_status())
+        self._autoclicker.mapping_changed.connect(lambda _: self._update_status())
 
         self._build_ui()
         self._build_menus()
         QShortcut(QKeySequence(Qt.Key_Escape), self, self._cancel_calibration)
         self._schedule_refresh()
-
     def _build_ui(self) -> None:
         central = QWidget()
         self.setCentralWidget(central)
         root = QHBoxLayout(central)
+        root.setContentsMargins(12, 12, 12, 12)
+        root.setSpacing(12)
 
         splitter = QSplitter(Qt.Horizontal)
         root.addWidget(splitter)
 
         left = QWidget()
         left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        left_layout.setSpacing(12)
 
         canvas_area = QWidget()
         canvas_grid = QGridLayout(canvas_area)
         canvas_grid.setContentsMargins(0, 0, 0, 0)
         canvas_grid.setSpacing(2)
         canvas_grid.addWidget(self._canvas, 0, 0)
-        self._pan_v_slider = QSlider(Qt.Vertical)
+        self._pan_v_slider = QScrollBar(Qt.Vertical)
         self._pan_v_slider.setRange(0, 1000)
         self._pan_v_slider.setEnabled(False)
         self._pan_v_slider.valueChanged.connect(self._on_pan_v_changed)
         canvas_grid.addWidget(self._pan_v_slider, 0, 1)
-        self._pan_h_slider = QSlider(Qt.Horizontal)
+        self._pan_h_slider = QScrollBar(Qt.Horizontal)
         self._pan_h_slider.setRange(0, 1000)
         self._pan_h_slider.setEnabled(False)
         self._pan_h_slider.valueChanged.connect(self._on_pan_h_changed)
@@ -150,6 +171,8 @@ class MainWindow(QMainWindow):
 
         right = QWidget()
         right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setSpacing(12)
         self._series_toolbar = SeriesToolbar()
         self._series_toolbar.series_changed.connect(self._on_series_changed)
         self._series_toolbar.add_series_requested.connect(self._on_add_series)
@@ -188,14 +211,44 @@ class MainWindow(QMainWindow):
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
+        autoclicker_menu = self.menuBar().addMenu("&Autoclicker")
+        self._autoclicker_enabled_action = QAction("Enabled", self)
+        self._autoclicker_enabled_action.setCheckable(True)
+        self._autoclicker_enabled_action.toggled.connect(self._set_autoclicker_enabled)
+        autoclicker_menu.addAction(self._autoclicker_enabled_action)
+        config_action = QAction("Configure...", self)
+        config_action.triggered.connect(self._open_autoclicker_config)
+        autoclicker_menu.addAction(config_action)
+
         tb = QToolBar("Navigation")
         self.addToolBar(tb)
         tb.addAction("Open", self._open_video_dialog)
         tb.addAction("Export CSV", self._export_csv)
 
+    def _set_autoclicker_enabled(self, enabled: bool) -> None:
+        self._autoclicker.set_enabled(enabled)
+        self._update_status()
+
+    def _open_autoclicker_config(self) -> None:
+        dialog = AutoClickerConfigDialog(self._autoclicker.mapping, self)
+        if dialog.exec_() != dialog.Accepted:
+            return
+        mapping = dialog.mapping()
+        if mapping is None:
+            QMessageBox.warning(self, "Autoclicker", "Each key can only be assigned once.")
+            return
+        self._autoclicker.set_mapping(mapping)
+        self._update_status()
+
     def closeEvent(self, event) -> None:
+        self._autoclicker.release_all_keys()
         self._decoder.stop_worker()
         super().closeEvent(event)
+
+    def changeEvent(self, event: QEvent) -> None:
+        if event.type() == QEvent.ActivationChange and not self.isActiveWindow():
+            self._autoclicker.release_all_keys()
+        super().changeEvent(event)
 
     def _open_video_dialog(self) -> None:
         path, _ = QFileDialog.getOpenFileName(
@@ -219,6 +272,10 @@ class MainWindow(QMainWindow):
         else:
             self._calibration.set_data(CalibrationData())
             self.pipeline.set_calibration(CalibrationData())
+        # New video should start with a clean slate.
+        self.collector.clear_marks()
+        self._marks_by_frame.clear()
+        self._refresh_panels()
         self._update_overlays()
 
     def _on_video_opened(self, fps: float, frame_count: int, width: int, height: int) -> None:
@@ -236,7 +293,7 @@ class MainWindow(QMainWindow):
         self._scrubber.blockSignals(True)
         self._scrubber.setValue(self._current_frame)
         self._scrubber.blockSignals(False)
-        self._go_to_frame(self._current_frame)
+        self._go_to_frame(self._current_frame, prefetch=True)
 
     def _on_frame_ready(self, index: int, qimage: QImage, timestamp_s: float) -> None:
         if index != self._current_frame:
@@ -245,7 +302,7 @@ class MainWindow(QMainWindow):
         self._canvas.tracker_scene.set_frame_pixmap(pixmap)
         self._current_timestamp = timestamp_s
         self._canvas.tracker_scene.set_frame_label(index, self._frame_count, timestamp_s)
-        self._canvas.viewport().update()
+        self._canvas.viewport().repaint()
         self._update_overlays()
         self._update_status()
 
@@ -279,19 +336,57 @@ class MainWindow(QMainWindow):
                     )
             return
 
+        self._record_click_at(px, py)
+
+    def _record_click_at(self, px: float, py: float) -> None:
         if self._frame_count <= 0:
             return
 
-        self.collector.append_mark(
+        mark = self.collector.append_mark(
             frame=self._current_frame,
             timestamp_s=self._current_timestamp,
             px=px,
             py=py,
         )
+        # Keep a per-frame index so we can update overlays without scanning the
+        # whole collector on every click.
+        self._marks_by_frame.setdefault(mark.frame, []).append(mark)
         self._canvas.tracker_scene.show_click_feedback(px, py)
         self._refresh_marks_on_canvas()
-        self._schedule_refresh()
+        if self._show_table.isChecked():
+            # Defer table work so rapid clicks stay responsive.
+            QTimer.singleShot(
+                0,
+                lambda: self._data_table.append_mark(
+                    self.collector,
+                    self.pipeline,
+                    mark,
+                ),
+            )
+        self._maybe_refresh_plot()
         self._advance_frame()
+
+    def _on_autoclick_requested(self) -> None:
+        pixel = self._current_canvas_pixel()
+        if pixel is None:
+            return
+        self._record_click_at(pixel[0], pixel[1])
+
+    def _current_canvas_pixel(self) -> tuple[float, float] | None:
+        view_pos = self._canvas.viewport().mapFromGlobal(QCursor.pos())
+        if not self._canvas.viewport().rect().contains(view_pos):
+            return None
+        scene_pos = self._canvas.mapToScene(view_pos)
+        px, py = self._canvas.scene_to_pixel(scene_pos.x(), scene_pos.y())
+        if 0 <= px <= self._width and 0 <= py <= self._height:
+            return px, py
+        return None
+
+    def _on_canvas_key_pressed(self, key: int, is_auto_repeat: bool) -> None:
+        self._autoclicker.handle_key_press(key, is_auto_repeat)
+
+    def _on_canvas_key_released(self, key: int, is_auto_repeat: bool) -> None:
+        self._autoclicker.handle_key_release(key, is_auto_repeat)
 
     def _on_pan_h_changed(self, value: int) -> None:
         if self._syncing_pan_sliders:
@@ -327,14 +422,14 @@ class MainWindow(QMainWindow):
 
     def _go_next(self) -> None:
         if self._current_frame < self._frame_count - 1:
-            self._go_to_frame(self._current_frame + 1)
+            self._go_to_frame(self._current_frame + 1, prefetch=True)
 
     def _on_scrub(self, value: int) -> None:
         if value != self._current_frame:
-            self._go_to_frame(value, coalesce=True)
+            self._go_to_frame(value, coalesce=True, prefetch=True)
 
     def _on_spin_jump(self, value: int) -> None:
-        self._go_to_frame(value - 1, coalesce=True)
+        self._go_to_frame(value - 1, coalesce=True, prefetch=True)
 
     def _go_to_frame(
         self,
@@ -443,11 +538,10 @@ class MainWindow(QMainWindow):
             scene.update_origin_grid(grid_ox, grid_oy)
 
     def _refresh_marks_on_canvas(self) -> None:
-        marks_data = []
-        for mark in self.collector.marks:
-            if mark.frame != self._current_frame:
-                continue
-            marks_data.append((mark.px, mark.py, "square"))
+        marks_data = [
+            (mark.px, mark.py, "square")
+            for mark in self._marks_by_frame.get(self._current_frame, [])
+        ]
         self._canvas.tracker_scene.set_marks(marks_data)
 
     def _schedule_refresh(self) -> None:
@@ -457,6 +551,15 @@ class MainWindow(QMainWindow):
         self._series_toolbar.refresh(self.collector)
         self._data_table.refresh(self.collector, self.pipeline)
         self._plot_panel.refresh(self.collector, self.pipeline)
+
+    def _maybe_refresh_plot(self) -> None:
+        if not self._show_plot.isChecked():
+            return
+        if self._plot_refresh_timer.elapsed() < self._min_plot_refresh_interval_ms:
+            return
+        self._plot_refresh_timer.restart()
+        # Plot redraw is relatively expensive; throttle it to keep click handling responsive.
+        QTimer.singleShot(0, lambda: self._plot_panel.refresh(self.collector, self.pipeline))
 
     def _on_series_changed(self, series_id: str) -> None:
         self.collector.set_active_series(series_id)
@@ -476,9 +579,12 @@ class MainWindow(QMainWindow):
 
     def _update_status(self) -> None:
         unit = self.pipeline.unit_suffix
+        autoclick_state = "ON" if self._autoclicker.enabled else "OFF"
+        mapping_summary = format_mapping_summary(self._autoclicker.mapping)
         frame_info = (
             f"Frame {self._current_frame + 1}/{self._frame_count}  "
-            f"t={self._current_timestamp:.4f}s  fps={self._fps:.1f}  units={unit}"
+            f"t={self._current_timestamp:.4f}s  fps={self._fps:.1f}  units={unit}  "
+            f"autoclicker={autoclick_state} [{mapping_summary}]"
         )
         cal_hints = {
             CalibrationMode.STICK_A: "Calibration: drag stick endpoint A, release to confirm",
@@ -495,6 +601,13 @@ class MainWindow(QMainWindow):
         if not self.collector.marks:
             QMessageBox.warning(self, "Export", "No marks to export.")
             return
+        if not self.pipeline.calibration.is_calibrated:
+            QMessageBox.warning(
+                self,
+                "Export",
+                "Calibration is required before exporting x (cm) and y (cm).",
+            )
+            return
         default_name = "export.csv"
         if self._video_path:
             default_name = f"{self._video_path.stem}_data.csv"
@@ -506,6 +619,9 @@ class MainWindow(QMainWindow):
         )
         if not path:
             return
-        video_name = self._video_path.name if self._video_path else "unknown"
-        export_csv(path, self.collector, self.pipeline, video_name, self._fps)
+        try:
+            export_csv(path, self.collector, self.pipeline)
+        except ValueError as exc:
+            QMessageBox.warning(self, "Export", str(exc))
+            return
         QMessageBox.information(self, "Export", f"Saved to {path}")

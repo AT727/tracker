@@ -11,9 +11,9 @@ from tracker.tracking.collector import TrackingCollector
 
 class PlotPanel(QWidget):
     AXIS_OPTIONS = [
-        ("x vs t", "x", "t"),
-        ("y vs t", "y", "t"),
-        ("y vs x", "y", "x"),
+        ("x vs t", "t", "x"),
+        ("y vs t", "t", "y"),
+        ("y vs x", "x", "y"),
     ]
 
     def __init__(self, parent=None) -> None:
@@ -26,8 +26,12 @@ class PlotPanel(QWidget):
         self._axis_combo.currentIndexChanged.connect(self._on_axis_changed)
         controls.addWidget(self._axis_combo)
         layout.addLayout(controls)
-        self._plot = pg.PlotWidget()
-        self._plot.showGrid(x=True, y=True, alpha=0.3)
+        self._plot = pg.PlotWidget(background='#1e1e1e')
+        self._plot.showGrid(x=True, y=True, alpha=0.15)
+        for axis in ['left', 'bottom']:
+            ax = self._plot.getAxis(axis)
+            ax.setPen('#5d5d5d')
+            ax.setTextPen('#8e8e93')
         self._plot.addLegend()
         layout.addWidget(self._plot)
         self._collector: TrackingCollector | None = None
@@ -74,7 +78,17 @@ class PlotPanel(QWidget):
                 xs.append(values[x_key])
                 ys.append(values[y_key])
             pen = pg.mkPen(color=series.color, width=2)
-            self._plot.plot(xs, ys, pen=pen, symbol="o", symbolSize=5, name=series.label)
+            brush = pg.mkBrush(color=series.color)
+            self._plot.plot(
+                xs,
+                ys,
+                pen=pen,
+                symbol="o",
+                symbolSize=6,
+                symbolBrush=brush,
+                symbolPen=pen,
+                name=series.label,
+            )
 
     @staticmethod
     def _axis_label(key: str, suffix: str) -> str:

@@ -6,14 +6,14 @@ from dataclasses import dataclass
 import itertools
 
 _DEFAULT_COLORS = [
-    "#e41a1c",
-    "#377eb8",
-    "#4daf4a",
-    "#984ea3",
-    "#ff7f00",
-    "#a65628",
-    "#f781bf",
-    "#999999",
+    "#0a84ff",  # Blue
+    "#30d158",  # Green
+    "#ff453a",  # Red
+    "#ff9f0a",  # Orange
+    "#bf5af2",  # Purple
+    "#ffd60a",  # Yellow
+    "#5ac8fa",  # Light Blue
+    "#ff2d55",  # Pink
 ]
 
 _id_counter = itertools.count(1)
