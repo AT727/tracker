@@ -45,8 +45,28 @@ class CalibrationStore:
         with p.open("w", encoding="utf-8") as f:
             json.dump(payload, f, indent=2)
 
+    @staticmethod
+    def save_preset(calibration: CalibrationData) -> None:
+        path = preset_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        CalibrationStore.save(path, calibration)
+
+    @staticmethod
+    def load_preset() -> CalibrationData | None:
+        return CalibrationStore.load(preset_path())
+
+    @staticmethod
+    def clear_preset() -> None:
+        path = preset_path()
+        if path.exists():
+            path.unlink()
+
 
 def _tuple_or_none(value) -> tuple[float, float] | None:
     if value is None:
         return None
     return float(value[0]), float(value[1])
+
+
+def preset_path() -> Path:
+    return Path.home() / ".tracker" / "calibration_preset.json"

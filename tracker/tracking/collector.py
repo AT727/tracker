@@ -62,6 +62,36 @@ class TrackingCollector:
         self._marks.append(mark)
         return mark
 
+    def upsert_mark(
+        self,
+        frame: int,
+        timestamp_s: float,
+        px: float,
+        py: float,
+        series_id: str | None = None,
+    ) -> tuple[Mark, bool]:
+        """Insert or replace a mark for one (series, frame) pair."""
+        sid = series_id or self._active_series_id
+        if sid is None or sid not in self._series:
+            raise ValueError("No active series")
+        mark = Mark(frame=frame, timestamp_s=timestamp_s, px=px, py=py, series_id=sid)
+        match_indices = [
+            idx
+            for idx, existing in enumerate(self._marks)
+            if existing.series_id == sid and existing.frame == frame
+        ]
+        if not match_indices:
+            self._marks.append(mark)
+            return mark, False
+
+        # Replace the newest existing mark and drop older duplicates so each
+        # (series, frame) pair remains unique.
+        replace_at = match_indices[-1]
+        self._marks[replace_at] = mark
+        for idx in reversed(match_indices[:-1]):
+            del self._marks[idx]
+        return mark, True
+
     def marks_for_series(self, series_id: str) -> list[Mark]:
         return [m for m in self._marks if m.series_id == series_id]
 

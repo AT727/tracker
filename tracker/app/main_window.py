@@ -34,7 +34,11 @@ from tracker.app.autoclicker import (
     format_mapping_summary,
 )
 from tracker.calibration.data import CalibrationData
-from tracker.calibration.persistence import CalibrationStore, sidecar_path_for_video
+from tracker.calibration.persistence import (
+    CalibrationStore,
+    preset_path,
+    sidecar_path_for_video,
+)
 from tracker.canvas.view import CanvasView
 from tracker.coordinates.pipeline import CoordinatePipeline
 from tracker.export.csv_writer import export_csv
@@ -177,6 +181,10 @@ class MainWindow(QMainWindow):
         self._series_toolbar.series_changed.connect(self._on_series_changed)
         self._series_toolbar.add_series_requested.connect(self._on_add_series)
         self._data_table = DataTablePanel()
+        self._data_table.go_to_frame_requested.connect(self._on_go_to_frame_requested)
+        self._table_skip_warning = QLabel("")
+        self._table_skip_warning.setObjectName("tableSkipWarning")
+        self._table_skip_warning.hide()
         self._plot_panel = PlotPanel()
         self._show_table = QCheckBox("Show table")
         self._show_table.setChecked(True)
@@ -185,6 +193,7 @@ class MainWindow(QMainWindow):
         self._show_plot.setChecked(True)
         self._show_plot.toggled.connect(self._toggle_plot)
         right_layout.addWidget(self._series_toolbar)
+        right_layout.addWidget(self._table_skip_warning)
         right_layout.addWidget(self._show_table)
         right_layout.addWidget(self._data_table, stretch=1)
         right_layout.addWidget(self._show_plot)
@@ -210,6 +219,24 @@ class MainWindow(QMainWindow):
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        cal_menu = self.menuBar().addMenu("&Calibration")
+        save_preset_action = QAction("Save Current as Preset", self)
+        save_preset_action.triggered.connect(self._save_preset)
+        cal_menu.addAction(save_preset_action)
+        clear_preset_action = QAction("Clear Preset", self)
+        clear_preset_action.triggered.connect(self._clear_preset)
+        cal_menu.addAction(clear_preset_action)
+        apply_preset_action = QAction("Apply Preset to This Video", self)
+        apply_preset_action.triggered.connect(self._apply_preset)
+        cal_menu.addAction(apply_preset_action)
+        cal_menu.addSeparator()
+        calibrate_action = QAction("Calibrate Stick...", self)
+        calibrate_action.triggered.connect(self._start_calibration)
+        cal_menu.addAction(calibrate_action)
+        origin_action = QAction("Set Origin...", self)
+        origin_action.triggered.connect(self._start_origin_calibration)
+        cal_menu.addAction(origin_action)
 
         autoclicker_menu = self.menuBar().addMenu("&Autoclicker")
         self._autoclicker_enabled_action = QAction("Enabled", self)
@@ -270,8 +297,13 @@ class MainWindow(QMainWindow):
             self._calibration.set_data(cal)
             self.pipeline.set_calibration(cal)
         else:
-            self._calibration.set_data(CalibrationData())
-            self.pipeline.set_calibration(CalibrationData())
+            preset = CalibrationStore.load_preset()
+            if preset:
+                self._calibration.set_data(preset)
+                self.pipeline.set_calibration(preset)
+            else:
+                self._calibration.set_data(CalibrationData())
+                self.pipeline.set_calibration(CalibrationData())
         # New video should start with a clean slate.
         self.collector.clear_marks()
         self._marks_by_frame.clear()
@@ -342,29 +374,19 @@ class MainWindow(QMainWindow):
         if self._frame_count <= 0:
             return
 
-        mark = self.collector.append_mark(
+        mark, _ = self.collector.upsert_mark(
             frame=self._current_frame,
             timestamp_s=self._current_timestamp,
             px=px,
             py=py,
         )
-        # Keep a per-frame index so we can update overlays without scanning the
-        # whole collector on every click.
-        self._marks_by_frame.setdefault(mark.frame, []).append(mark)
+        self._sync_marks_for_frame(mark.frame)
+        self._advance_frame()
         self._canvas.tracker_scene.show_click_feedback(px, py)
-        self._refresh_marks_on_canvas()
         if self._show_table.isChecked():
             # Defer table work so rapid clicks stay responsive.
-            QTimer.singleShot(
-                0,
-                lambda: self._data_table.append_mark(
-                    self.collector,
-                    self.pipeline,
-                    mark,
-                ),
-            )
+            QTimer.singleShot(0, self._refresh_table)
         self._maybe_refresh_plot()
-        self._advance_frame()
 
     def _on_autoclick_requested(self) -> None:
         pixel = self._current_canvas_pixel()
@@ -544,13 +566,51 @@ class MainWindow(QMainWindow):
         ]
         self._canvas.tracker_scene.set_marks(marks_data)
 
+    def _sync_marks_for_frame(self, frame: int) -> None:
+        marks = [mark for mark in self.collector.marks if mark.frame == frame]
+        if marks:
+            self._marks_by_frame[frame] = marks
+        else:
+            self._marks_by_frame.pop(frame, None)
+
     def _schedule_refresh(self) -> None:
         QTimer.singleShot(0, self._refresh_panels)
 
     def _refresh_panels(self) -> None:
         self._series_toolbar.refresh(self.collector)
-        self._data_table.refresh(self.collector, self.pipeline)
+        self._refresh_table()
         self._plot_panel.refresh(self.collector, self.pipeline)
+
+    def _refresh_table(self) -> None:
+        active_series_id = self.collector.active_series_id
+        skip_frames = self._find_skipped_frames(active_series_id)
+        gap_after_frames = {start for start, _ in skip_frames}
+        self._data_table.refresh(
+            self.collector,
+            self.pipeline,
+            series_id=active_series_id,
+            gap_after_frames=gap_after_frames,
+        )
+        self._update_skip_warning(skip_frames)
+
+    def _find_skipped_frames(self, series_id: str | None) -> list[tuple[int, int]]:
+        if not series_id:
+            return []
+        frame_indices = sorted({mark.frame for mark in self.collector.marks_for_series(series_id)})
+        skipped_ranges: list[tuple[int, int]] = []
+        for current, following in zip(frame_indices, frame_indices[1:]):
+            if following - current > 1:
+                skipped_ranges.append((current, following))
+        return skipped_ranges
+
+    def _update_skip_warning(self, skipped_ranges: list[tuple[int, int]]) -> None:
+        missing_count = sum(end - start - 1 for start, end in skipped_ranges)
+        if missing_count <= 0:
+            self._table_skip_warning.hide()
+            self._table_skip_warning.clear()
+            return
+        self._table_skip_warning.setText(f"[!] {missing_count} skipped frame(s) detected")
+        self._table_skip_warning.show()
 
     def _maybe_refresh_plot(self) -> None:
         if not self._show_plot.isChecked():
@@ -564,12 +624,17 @@ class MainWindow(QMainWindow):
     def _on_series_changed(self, series_id: str) -> None:
         self.collector.set_active_series(series_id)
         self._refresh_marks_on_canvas()
+        self._refresh_table()
 
     def _on_add_series(self) -> None:
         self.collector.add_series()
         self._series_toolbar.refresh(self.collector)
         if self.collector.active_series_id:
             self.collector.set_active_series(self.collector.active_series_id)
+        self._refresh_table()
+
+    def _on_go_to_frame_requested(self, frame_index: int) -> None:
+        self._go_to_frame(frame_index, prefetch=True, coalesce=True)
 
     def _toggle_table(self, visible: bool) -> None:
         self._data_table.setVisible(visible)
@@ -625,3 +690,36 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Export", str(exc))
             return
         QMessageBox.information(self, "Export", f"Saved to {path}")
+
+    def _save_preset(self) -> None:
+        if not self._calibration.data.is_calibrated:
+            QMessageBox.warning(
+                self,
+                "Save Preset",
+                "Complete the stick + origin calibration before saving as preset.",
+            )
+            return
+        CalibrationStore.save_preset(self._calibration.data)
+        preset = preset_path()
+        self._status.showMessage(
+            f"Calibration preset saved ({preset.name})", 5000
+        )
+
+    def _clear_preset(self) -> None:
+        CalibrationStore.clear_preset()
+        self._status.showMessage("Calibration preset cleared", 5000)
+
+    def _apply_preset(self) -> None:
+        preset = CalibrationStore.load_preset()
+        if not preset:
+            QMessageBox.warning(
+                self,
+                "Apply Preset",
+                "No saved preset found. Use Calibration > Save Current as Preset first.",
+            )
+            return
+        self._calibration.set_data(preset)
+        self.pipeline.set_calibration(preset)
+        self._update_overlays()
+        self._schedule_refresh()
+        self._status.showMessage("Global calibration preset applied", 5000)

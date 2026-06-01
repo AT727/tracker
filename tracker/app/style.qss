@@ -19,6 +19,12 @@ QLabel {
     color: #e3e3e3;
 }
 
+QLabel#tableSkipWarning {
+    color: #ff6b6b;
+    font-weight: 600;
+    padding: 2px 0px 2px 0px;
+}
+
 /* Standard group and nested panels */
 QWidget#central {
     background-color: #121212;

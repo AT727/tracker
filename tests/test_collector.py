@@ -38,3 +38,29 @@ def test_recompute_after_calibration_change():
     w2 = pipeline.pixel_to_world(100.0, 50.0)
     assert w2.x == pytest.approx(10.0)
     assert w2.y == pytest.approx(-5.0)
+
+
+def test_upsert_mark_replaces_existing_frame_for_series():
+    collector = TrackingCollector()
+    first, replaced_first = collector.upsert_mark(3, 0.1, 10.0, 20.0)
+    second, replaced_second = collector.upsert_mark(3, 0.2, 99.0, 77.0)
+
+    assert not replaced_first
+    assert replaced_second
+    assert len(collector.marks) == 1
+    assert first.frame == second.frame == 3
+    assert collector.marks[0].px == pytest.approx(99.0)
+    assert collector.marks[0].py == pytest.approx(77.0)
+
+
+def test_upsert_mark_is_scoped_per_series():
+    collector = TrackingCollector()
+    base_series = collector.active_series_id
+    second_series = collector.add_series("Second")
+
+    collector.upsert_mark(5, 0.3, 1.0, 2.0, series_id=base_series)
+    collector.upsert_mark(5, 0.4, 3.0, 4.0, series_id=second_series.id)
+
+    assert len(collector.marks) == 2
+    assert len(collector.marks_for_series(base_series)) == 1
+    assert len(collector.marks_for_series(second_series.id)) == 1

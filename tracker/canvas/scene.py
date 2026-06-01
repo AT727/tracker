@@ -59,16 +59,19 @@ class TrackerScene(QGraphicsScene):
         self._frame_label.set_frame_text(index, total, timestamp_s)
 
     def set_marks(self, marks: list[tuple[float, float, str]]) -> None:
-        for item in self._mark_items:
-            self.removeItem(item)
-        self._mark_items.clear()
-        for px, py, style in marks:
-            if style == "dot":
-                item = MarkDotItem(px, py)
+        for i, (px, py, style) in enumerate(marks):
+            if i < len(self._mark_items):
+                self._mark_items[i].setPos(px, py)
             else:
-                item = MarkSquareItem(px, py)
-            self.addItem(item)
-            self._mark_items.append(item)
+                if style == "dot":
+                    item = MarkDotItem(px, py)
+                else:
+                    item = MarkSquareItem(px, py)
+                self.addItem(item)
+                self._mark_items.append(item)
+        while len(self._mark_items) > len(marks):
+            item = self._mark_items.pop()
+            self.removeItem(item)
 
     def show_click_feedback(self, px: float, py: float) -> None:
         if self._click_feedback is not None:
