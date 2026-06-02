@@ -1,4 +1,5 @@
 from tracker.coordinates.pipeline import CoordinatePipeline
+from tracker.mutations.models import ColumnMutation
 from tracker.panels.data_table import DataTablePanel
 from tracker.tracking.collector import TrackingCollector
 
@@ -42,3 +43,52 @@ def test_refresh_filters_to_active_series(qtbot):
 
     assert panel.rowCount() == 1
     assert panel.item(0, 0).text() == "1"
+
+
+def test_refresh_appends_mutation_columns_in_header(qtbot):
+    panel = DataTablePanel()
+    qtbot.addWidget(panel)
+    collector = TrackingCollector()
+    collector.upsert_mark(0, 0.0, 10.0, 10.0)
+
+    mutations = [
+        ColumnMutation("norm_x", "x * 2"),
+        ColumnMutation("offset_y", "y + 1"),
+    ]
+    panel.refresh(collector, CoordinatePipeline(), mutations=mutations)
+
+    headers = [panel.horizontalHeaderItem(i).text() for i in range(panel.columnCount())]
+    assert headers == ["frame", "t (s)", "x (cm)", "y (cm)", "norm_x", "offset_y"]
+
+
+def test_refresh_computes_mutation_values_per_row(qtbot):
+    panel = DataTablePanel()
+    qtbot.addWidget(panel)
+    collector = TrackingCollector()
+    collector.upsert_mark(0, 0.0, 100.0, 50.0)
+    collector.upsert_mark(1, 1.0, 30.0, 20.0)
+
+    mutations = [
+        ColumnMutation("sum", "x + y"),
+        ColumnMutation("product", "x * y"),
+    ]
+    panel.refresh(collector, CoordinatePipeline(), mutations=mutations)
+
+    assert panel.item(0, 4).text() == "150.000"
+    assert panel.item(0, 5).text() == "5000.000"
+    assert panel.item(1, 4).text() == "50.000"
+    assert panel.item(1, 5).text() == "600.000"
+
+
+def test_refresh_shows_err_for_invalid_formula(qtbot):
+    panel = DataTablePanel()
+    qtbot.addWidget(panel)
+    collector = TrackingCollector()
+    collector.upsert_mark(0, 0.0, 10.0, 10.0)
+
+    mutations = [
+        ColumnMutation("bad", "x + z"),
+    ]
+    panel.refresh(collector, CoordinatePipeline(), mutations=mutations)
+
+    assert panel.item(0, 4).text() == "ERR"

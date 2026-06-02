@@ -36,6 +36,20 @@ class PlotPanel(QWidget):
         layout.addWidget(self._plot)
         self._collector: TrackingCollector | None = None
         self._pipeline: CoordinatePipeline | None = None
+        self._plotted_data: list[dict] = []
+        self._hover_text = pg.TextItem(
+            "",
+            anchor=(0, 1),
+            color="#ffffff",
+            fill=pg.mkBrush(30, 30, 30, 200),
+        )
+        self._plot.addItem(self._hover_text)
+        self._hover_text.hide()
+        self._proxy = pg.SignalProxy(
+            self._plot.scene().sigMouseMoved,
+            rateLimit=30,
+            slot=self._on_mouse_moved,
+        )
 
     def refresh(
         self,
@@ -62,6 +76,7 @@ class PlotPanel(QWidget):
         self._plot.setLabel("bottom", x_label)
         self._plot.setLabel("left", y_label)
 
+        self._plotted_data = []
         for series in self._collector.series:
             marks = self._collector.marks_for_series(series.id)
             if not marks:
@@ -89,6 +104,51 @@ class PlotPanel(QWidget):
                 symbolPen=pen,
                 name=series.label,
             )
+            self._plotted_data.append({"xs": xs, "ys": ys})
+        self._plot.addItem(self._hover_text)
+        self._hover_text.hide()
+
+    def _on_mouse_moved(self, evt) -> None:
+        if not self._plotted_data or self._pipeline is None:
+            return
+        pos = evt[0]
+        vb = self._plot.plotItem.vb
+        mouse_data = vb.mapSceneToView(pos)
+        mx, my = mouse_data.x(), mouse_data.y()
+
+        pw, ph = vb.viewPixelSize()
+        threshold = 15.0 * max(pw, ph)
+
+        best_dist = threshold * threshold
+        best_x = None
+        best_y = None
+
+        for entry in self._plotted_data:
+            for x, y in zip(entry["xs"], entry["ys"]):
+                dx = x - mx
+                dy = y - my
+                dist = dx * dx + dy * dy
+                if dist < best_dist:
+                    best_dist = dist
+                    best_x = x
+                    best_y = y
+
+        if best_x is not None:
+            suffix = self._pipeline.unit_suffix
+            self._hover_text.setText(
+                f"({self._format_value(best_y, suffix)}, "
+                f"{self._format_value(best_x, suffix)})"
+            )
+            self._hover_text.setPos(best_x, best_y)
+            self._hover_text.show()
+        else:
+            self._hover_text.hide()
+
+    @staticmethod
+    def _format_value(val: float, suffix: str) -> str:
+        if suffix == "px":
+            return str(int(round(val)))
+        return f"{val:.2f}"
 
     @staticmethod
     def _axis_label(key: str, suffix: str) -> str:

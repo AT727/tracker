@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from PyQt5.QtCore import Qt, QPointF, pyqtSignal
-from PyQt5.QtGui import QMouseEvent, QPainter, QWheelEvent
+from PyQt5.QtGui import QColor, QCursor, QMouseEvent, QPainter, QPen, QPixmap, QWheelEvent
 from PyQt5.QtWidgets import QGraphicsView
 
 from tracker.canvas.scene import TrackerScene
@@ -34,10 +34,22 @@ class CanvasView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setBackgroundBrush(Qt.black)
         self.setFocusPolicy(Qt.StrongFocus)
-        self.setCursor(Qt.CrossCursor)
+        self.setCursor(self._make_hollow_dot_cursor())
         self._image_w = 0
         self._image_h = 0
         self._left_down = False
+
+    @staticmethod
+    def _make_hollow_dot_cursor() -> QCursor:
+        size = 20
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#ff453a"), 2))
+        painter.drawEllipse(1, 1, size - 2, size - 2)
+        painter.end()
+        return QCursor(pixmap, size // 2, size // 2)
 
     @property
     def tracker_scene(self) -> TrackerScene:

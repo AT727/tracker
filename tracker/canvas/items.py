@@ -14,6 +14,7 @@ from PyQt5.QtWidgets import (
 )
 
 MARK_RED = "#ff453a"
+CLICK_GREEN = "#30d158"
 
 
 class FramePixmapItem(QGraphicsPixmapItem):
@@ -99,11 +100,15 @@ class OriginGridOverlay(QGraphicsItemGroup):
 
 
 class MarkDotItem(QGraphicsEllipseItem):
-    def __init__(self, px: float, py: float, color: str = MARK_RED, radius: float = 5) -> None:
+    def __init__(self, px: float, py: float, color: str = MARK_RED, radius: float = 5, filled: bool = True) -> None:
         super().__init__(-radius, -radius, radius * 2, radius * 2)
         self.setPos(px, py)
-        self.setBrush(QBrush(QColor(color)))
-        self.setPen(QPen(Qt.black, 1))
+        if filled:
+            self.setBrush(QBrush(QColor(color)))
+            self.setPen(QPen(Qt.black, 1))
+        else:
+            self.setBrush(QBrush(Qt.NoBrush))
+            self.setPen(QPen(QColor(color), 2))
 
 
 class MarkSquareItem(QGraphicsRectItem):

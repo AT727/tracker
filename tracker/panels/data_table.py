@@ -7,6 +7,7 @@ from PyQt5.QtGui import QColor
 from PyQt5.QtWidgets import QHeaderView, QMenu, QTableWidget, QTableWidgetItem
 
 from tracker.coordinates.pipeline import CoordinatePipeline
+from tracker.mutations import ColumnMutation, eval_formula
 from tracker.tracking.collector import TrackingCollector
 
 
@@ -21,8 +22,7 @@ class DataTablePanel(QTableWidget):
     _SEPARATOR_HEIGHT = 8
 
     def __init__(self, parent=None) -> None:
-        super().__init__(0, len(self.HEADERS), parent)
-        self.setHorizontalHeaderLabels(self.HEADERS)
+        super().__init__(0, 4, parent)
         self.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setSelectionBehavior(QTableWidget.SelectRows)
@@ -35,7 +35,9 @@ class DataTablePanel(QTableWidget):
         pipeline: CoordinatePipeline,
         series_id: str | None = None,
         gap_after_frames: set[int] | None = None,
+        mutations: list[ColumnMutation] | None = None,
     ) -> None:
+        mutations = mutations or []
         marks = (
             collector.marks_for_series(series_id)
             if series_id
@@ -46,8 +48,11 @@ class DataTablePanel(QTableWidget):
         scrollbar = self.verticalScrollBar()
         at_bottom = scrollbar.value() >= scrollbar.maximum() - self._SCROLL_THRESHOLD
         row_count = len(marks) + sum(1 for mark in marks if mark.frame in gap_after_frames)
+        col_count = len(self.HEADERS) + len(mutations)
+        self.setColumnCount(col_count)
         self.setRowCount(row_count)
-        self.setHorizontalHeaderLabels(self.HEADERS)
+        headers = list(self.HEADERS) + [m.name for m in mutations]
+        self.setHorizontalHeaderLabels(headers)
         row = 0
         for mark in marks:
             world = pipeline.pixel_to_world(mark.px, mark.py)
@@ -61,17 +66,42 @@ class DataTablePanel(QTableWidget):
                 item = QTableWidgetItem(text)
                 item.setData(self._FRAME_ROLE, mark.frame)
                 self.setItem(row, col, item)
+            self._set_mutation_cells(row, mark, world, mutations)
             row += 1
             if mark.frame in gap_after_frames:
-                self._insert_gap_row(row)
+                self._insert_gap_row(row, len(mutations))
                 row += 1
         if marks and (at_bottom or len(marks) == 1):
             target_row = self._last_data_row()
             if target_row is not None:
                 self.scrollToItem(self.item(target_row, 0))
 
-    def _insert_gap_row(self, row: int) -> None:
-        values = ["", "missing frame(s)", "", ""]
+    def _set_mutation_cells(
+        self,
+        row: int,
+        mark,
+        world,
+        mutations: list[ColumnMutation],
+    ) -> None:
+        vars = {
+            "x": world.x,
+            "y": world.y,
+            "t": mark.timestamp_s,
+            "frame": float(mark.frame),
+        }
+        for col_offset, mutation in enumerate(mutations):
+            col = len(self.HEADERS) + col_offset
+            try:
+                result = eval_formula(mutation.formula, vars)
+                text = f"{result:.3f}"
+            except (ValueError, ZeroDivisionError):
+                text = "ERR"
+            item = QTableWidgetItem(text)
+            item.setData(self._FRAME_ROLE, mark.frame)
+            self.setItem(row, col, item)
+
+    def _insert_gap_row(self, row: int, mutation_count: int = 0) -> None:
+        values = ["", "missing frame(s)", "", ""] + [""] * mutation_count
         for col, text in enumerate(values):
             item = QTableWidgetItem(text)
             item.setFlags(item.flags() & ~Qt.ItemIsSelectable)

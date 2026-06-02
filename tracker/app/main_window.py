@@ -42,6 +42,8 @@ from tracker.calibration.persistence import (
 from tracker.canvas.view import CanvasView
 from tracker.coordinates.pipeline import CoordinatePipeline
 from tracker.export.csv_writer import export_csv
+from tracker.mutations.dialog import MutationManagerDialog
+from tracker.mutations.persistence import MutationStore
 from tracker.panels.data_table import DataTablePanel
 from tracker.panels.plot_panel import PlotPanel
 from tracker.panels.series_toolbar import SeriesToolbar
@@ -73,6 +75,8 @@ class MainWindow(QMainWindow):
         self._min_plot_refresh_interval_ms = 200
         self._autoclicker = AutoClickerController(self)
         self._autoclicker_enabled_action: QAction | None = None
+
+        self._mutations = MutationStore().load()
 
         self._decoder = VideoDecoderWorker()
         self._decoder.opened.connect(self._on_video_opened)
@@ -247,6 +251,11 @@ class MainWindow(QMainWindow):
         config_action.triggered.connect(self._open_autoclicker_config)
         autoclicker_menu.addAction(config_action)
 
+        col_menu = self.menuBar().addMenu("&Columns")
+        manager_action = QAction("Column Manager...", self)
+        manager_action.triggered.connect(self._open_column_manager)
+        col_menu.addAction(manager_action)
+
         tb = QToolBar("Navigation")
         self.addToolBar(tb)
         tb.addAction("Open", self._open_video_dialog)
@@ -266,6 +275,14 @@ class MainWindow(QMainWindow):
             return
         self._autoclicker.set_mapping(mapping)
         self._update_status()
+
+    def _open_column_manager(self) -> None:
+        dialog = MutationManagerDialog(self._mutations, self)
+        if dialog.exec_() != dialog.Accepted:
+            return
+        self._mutations = dialog.mutations()
+        MutationStore().save(self._mutations)
+        self._schedule_refresh()
 
     def closeEvent(self, event) -> None:
         self._autoclicker.release_all_keys()
@@ -350,11 +367,15 @@ class MainWindow(QMainWindow):
             if self._calibration.begin_point():
                 self._calibration.update_draft(px, py)
                 self._update_overlays()
+        else:
+            self._canvas.tracker_scene.show_click_feedback(px, py)
 
     def _on_pixel_moved(self, px: float, py: float) -> None:
         if self._calibration.mode != CalibrationMode.NONE:
             if self._calibration.update_draft(px, py):
                 self._update_overlays()
+        else:
+            self._canvas.tracker_scene.show_click_feedback(px, py)
 
     def _on_pixel_released(self, px: float, py: float) -> None:
         if self._calibration.mode != CalibrationMode.NONE:
@@ -382,7 +403,6 @@ class MainWindow(QMainWindow):
         )
         self._sync_marks_for_frame(mark.frame)
         self._advance_frame()
-        self._canvas.tracker_scene.show_click_feedback(px, py)
         if self._show_table.isChecked():
             # Defer table work so rapid clicks stay responsive.
             QTimer.singleShot(0, self._refresh_table)
@@ -590,6 +610,7 @@ class MainWindow(QMainWindow):
             self.pipeline,
             series_id=active_series_id,
             gap_after_frames=gap_after_frames,
+            mutations=self._mutations,
         )
         self._update_skip_warning(skip_frames)
 
@@ -685,7 +706,7 @@ class MainWindow(QMainWindow):
         if not path:
             return
         try:
-            export_csv(path, self.collector, self.pipeline)
+            export_csv(path, self.collector, self.pipeline, mutations=self._mutations)
         except ValueError as exc:
             QMessageBox.warning(self, "Export", str(exc))
             return

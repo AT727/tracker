@@ -7,6 +7,7 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QGraphicsScene, QGraphicsItem
 
 from tracker.canvas.items import (
+    CLICK_GREEN,
     FrameLabelItem,
     FramePixmapItem,
     MarkDotItem,
@@ -73,10 +74,10 @@ class TrackerScene(QGraphicsScene):
             item = self._mark_items.pop()
             self.removeItem(item)
 
-    def show_click_feedback(self, px: float, py: float) -> None:
+    def show_click_feedback(self, px: float, py: float, color: str = CLICK_GREEN, filled: bool = False) -> None:
         if self._click_feedback is not None:
             self.removeItem(self._click_feedback)
-        self._click_feedback = MarkDotItem(px, py)
+        self._click_feedback = MarkDotItem(px, py, color=color, filled=filled)
         self.addItem(self._click_feedback)
 
     def clear_click_feedback(self) -> None:
