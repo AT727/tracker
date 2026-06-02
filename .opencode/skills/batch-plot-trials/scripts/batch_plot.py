@@ -30,7 +30,9 @@ def find_csvs(folder: Path) -> list[Path]:
     return sorted(folder.glob("*.csv"))
 
 
-def process_folder(folder: Path, script: Path, output_dir: Path | None) -> tuple[bool, str]:
+def process_folder(folder: Path, script: Path, output_dir: Path | None,
+                   no_align: bool = False,
+                   align_mode: str | None = None) -> tuple[bool, str]:
     """
     Run plot_trials.py on all CSVs in folder.
     Returns (success, message).
@@ -40,7 +42,16 @@ def process_folder(folder: Path, script: Path, output_dir: Path | None) -> tuple
     if len(csvs) < 2:
         return False, f"Skipped — only {len(csvs)} CSV file(s) found (need ≥ 2)"
 
-    output_name = f"{folder.name}_trials_aligned.png"
+    # ── output name reflects alignment mode ──────────────────────────────────
+    base_name = folder.name
+    if no_align:
+        mode_tag = "noalign"
+    elif align_mode == "mean":
+        mode_tag = "align_mean"
+    else:
+        mode_tag = "align_ref"
+
+    output_name = f"{base_name}_trials_{mode_tag}.png"
     if output_dir:
         output_path = output_dir / output_name
     else:
@@ -52,6 +63,10 @@ def process_folder(folder: Path, script: Path, output_dir: Path | None) -> tuple
         *[str(c) for c in csvs],
         "--output", str(output_path),
     ]
+    if no_align:
+        cmd.append("--no-align")
+    elif align_mode:
+        cmd.extend(["--align-mode", align_mode])
 
     try:
         result = subprocess.run(
@@ -87,7 +102,15 @@ def main():
     parser.add_argument(
         "--script", "-s", type=Path, default=None,
         help="Path to plot_trials.py (default: looks in same dir as batch_plot.py)."
-    )
+    );
+    parser.add_argument(
+        "--no-align", action="store_true",
+        help="Skip cross-correlation alignment (pass through to plot_trials.py)."
+    );
+    parser.add_argument(
+        "--align-mode", choices=["ref", "mean"], default=None,
+        help="Alignment algorithm (pass through to plot_trials.py)."
+    );
     args = parser.parse_args()
 
     # ── locate plot_trials.py ─────────────────────────────────────────────────
@@ -136,7 +159,9 @@ def main():
 
     for folder in folders:
         print(f"  [{folder.name}] ", end="", flush=True)
-        ok, msg = process_folder(folder, script, args.output_dir)
+        ok, msg = process_folder(folder, script, args.output_dir,
+                                 no_align=args.no_align,
+                                 align_mode=args.align_mode)
         if ok:
             print(f"[OK]  {msg}")
             successes.append((folder.name, msg))

@@ -56,6 +56,148 @@ def compute_rmse(signal: np.ndarray, reference: np.ndarray) -> float:
     return float(np.sqrt(np.mean(diff ** 2)))
 
 
+# ── cross-correlation alignment ──────────────────────────────────────────────
+def compute_optimal_lag(signal: np.ndarray, reference: np.ndarray,
+                        max_lag: int) -> int:
+    """Find lag (in samples) that best aligns *signal* to *reference*.
+
+    Positive lag means *signal* starts after *reference* (shift signal left).
+    Negative lag means *signal* starts before *reference* (shift signal right).
+    """
+    sig_norm = signal - signal.mean()
+    ref_norm = reference - reference.mean()
+    denom = np.sqrt(np.sum(sig_norm ** 2) * np.sum(ref_norm ** 2))
+    if denom == 0:
+        return 0
+
+    corr = np.correlate(sig_norm, ref_norm, mode="full")
+    corr_norm = corr / denom
+
+    center = len(ref_norm) - 1          # zero-lag index
+    start  = max(0, center - max_lag)
+    end    = min(len(corr), center + max_lag + 1)
+
+    peak_idx = int(np.argmax(corr_norm[start:end])) + start
+    return peak_idx - center
+
+
+def apply_lag(signal: np.ndarray, lag: int, fill: float = np.nan) -> np.ndarray:
+    """Shift *signal* by *lag* samples, filling vacated positions with *fill*."""
+    if lag == 0:
+        return signal.copy()
+    n = len(signal)
+    shifted = np.full(n, fill)
+    if lag > 0:          # signal starts late → trim front, pad end
+        shifted[:n - lag] = signal[lag:]
+    else:                # signal starts early → pad front, trim end
+        shifted[-lag:] = signal[:n + lag]
+    return shifted
+
+
+def align_to_ref(signals: list[np.ndarray],
+                 max_lag_ratio: float = 0.2) -> tuple[list[np.ndarray], list[int]]:
+    """Align all signals to the first signal (Trial 1) using cross-correlation.
+
+    Uses normalised cross-correlation to find the optimal lag for each
+    signal relative to Trial 1 (index 0).  Trial 1 is kept as-is.
+    """
+    ref = signals[0]
+    n_samples = len(ref)
+    max_lag_samps = int(n_samples * max_lag_ratio)
+
+    aligned: list[np.ndarray] = [ref.copy()]
+    lags = [0]
+
+    for sig in signals[1:]:
+        lag = compute_optimal_lag(sig, ref, max_lag_samps)
+        lags.append(lag)
+        aligned.append(apply_lag(sig, lag))
+
+    # Trim to region where every shifted signal has valid data
+    stack = np.vstack(aligned)
+    valid = ~np.any(np.isnan(stack), axis=0)
+    if valid.sum() >= 3:
+        aligned = [row[valid].copy() for row in aligned]
+
+    return aligned, lags
+
+
+def align_signals(signals: list[np.ndarray],
+                  max_lag_ratio: float = 0.2,
+                  max_iter: int = 10,
+                  tol: float = 1e-6) -> tuple[list[np.ndarray], list[int], bool]:
+    """Iteratively align a group of signals to their running mean.
+
+    Uses normalised cross-correlation to find the optimal lag for each
+    signal relative to the current mean of the group.  Repeats until
+    no signal shifts by more than *tol* samples.
+
+    Parameters
+    ----------
+    signals
+        List of equal-length 1-D arrays.
+    max_lag_ratio
+        Maximum allowed lag as a fraction of signal length.
+    max_iter
+        Maximum alignment iterations.
+    tol
+        Convergence threshold (mean absolute lag change < tol).
+
+    Returns
+    -------
+    aligned
+        Shifted copies (shorter if trimming occurred).
+    final_lags
+        Lag applied to each input signal.
+    converged
+        Whether iterative process converged.
+    """
+    n = len(signals)
+    n_samples = len(signals[0])
+    max_lag_samps = int(n_samples * max_lag_ratio)
+
+    # Initial common-validity mask (all rows have data).
+    stack = np.vstack(signals)
+    valid = ~np.any(np.isnan(stack), axis=0)
+    if valid.sum() < 3:
+        valid = np.ones(n_samples, dtype=bool)
+    stack = stack[:, valid]
+
+    cumulative_lags = np.zeros(n, dtype=int)
+    prev_delta_lags = np.zeros(n, dtype=int)
+    converged = False
+
+    for _it in range(max_iter):
+        mean_ref = np.mean(stack, axis=0)
+
+        new_delta_lags = np.zeros(n, dtype=int)
+        new_rows = np.empty((n, stack.shape[1]))
+
+        for i in range(n):
+            lag = compute_optimal_lag(stack[i], mean_ref, max_lag_samps)
+            new_delta_lags[i] = lag
+            new_rows[i] = apply_lag(stack[i], lag)
+
+        max_drift = np.mean(np.abs(new_delta_lags - prev_delta_lags))
+
+        # Accumulate to cumulative lag
+        cumulative_lags += new_delta_lags
+
+        # Trim NaN introduced by shifting, then iterate
+        valid = ~np.any(np.isnan(new_rows), axis=0)
+        if valid.sum() < 3:
+            break
+        stack = new_rows[:, valid]
+        prev_delta_lags = new_delta_lags
+
+        if max_drift < tol:
+            converged = True
+            break
+
+    aligned = [row.copy() for row in stack]
+    return aligned, cumulative_lags.tolist(), converged
+
+
 def build_table_ax(fig, gs_table, trial_labels, rmse_vals, nrmse_vals,
                    mean_rmse, mean_nrmse):
     """Draw the RMSE table in its own dedicated axes column."""
@@ -116,7 +258,8 @@ def build_table_ax(fig, gs_table, trial_labels, rmse_vals, nrmse_vals,
     return ax_t
 
 
-def plot_trials(csv_paths: list[str], output_path: str) -> None:
+def plot_trials(csv_paths: list[str], output_path: str,
+                align: bool = True, align_mode: str = "ref") -> None:
     # ── load ──────────────────────────────────────────────────────────────────
     trials: list[pd.DataFrame] = [load_csv(p) for p in csv_paths]
     n = len(trials)
@@ -132,6 +275,26 @@ def plot_trials(csv_paths: list[str], output_path: str) -> None:
         np.interp(t_common, df["t (s)"].values, df["correct y"].values)
         for df in trials
     ]
+
+    # ── optional cross-correlation alignment ─────────────────────────────────
+    if align and n >= 2:
+        if align_mode == "ref":
+            aligned, lags = align_to_ref(interp_signals)
+            if any(l != 0 for l in lags):
+                lag_str = ", ".join(f"Trial {i+1}: {l} samp" for i, l in enumerate(lags))
+                print(f"  [i] Align-to-ref lags: {lag_str}")
+        else:
+            aligned, lags, converged = align_signals(interp_signals)
+            if not converged:
+                print("  [!] Iterative mean alignment did not fully converge.")
+            if any(l != 0 for l in lags):
+                lag_str = ", ".join(f"Trial {i+1}: {l} samp" for i, l in enumerate(lags))
+                print(f"  [i] Iterative-mean lags: {lag_str}")
+
+        # Trim t_common to match the trimmed signals (shorter after alignment)
+        if len(aligned[0]) < len(t_common):
+            t_common = t_common[:len(aligned[0])]
+        interp_signals = aligned
 
     stack  = np.vstack(interp_signals)
     mean_y = stack.mean(axis=0)
@@ -211,12 +374,22 @@ def plot_trials(csv_paths: list[str], output_path: str) -> None:
 # ── CLI ───────────────────────────────────────────────────────────────────────
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot aligned wave-height trials with mean ± 1σ and RMSE table."
+        description="Plot aligned wave-height trials with mean ± 1σ and RMSE table.",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog=(
+            "Alignment modes:\n"
+            "  ref   (default)  Align each trial to Trial 1 via cross-correlation.\n"
+            "  mean             Iteratively align all trials to the group mean.\n"
+        ),
     )
     parser.add_argument("csvs", nargs="+",
                         help="One or more CSV files (tab or comma separated).")
     parser.add_argument("--output", "-o", default="trials_aligned.png",
                         help="Output PNG path (default: trials_aligned.png).")
+    parser.add_argument("--no-align", action="store_true",
+                        help="Skip cross-correlation alignment (raw overlay).")
+    parser.add_argument("--align-mode", choices=["ref", "mean"], default="ref",
+                        help="Alignment algorithm (default: ref).")
     args = parser.parse_args()
 
     missing = [p for p in args.csvs if not os.path.isfile(p)]
@@ -224,7 +397,8 @@ def main():
         print(f"ERROR: file(s) not found: {missing}", file=sys.stderr)
         sys.exit(1)
 
-    plot_trials(args.csvs, args.output)
+    plot_trials(args.csvs, args.output,
+                align=not args.no_align, align_mode=args.align_mode)
 
 
 if __name__ == "__main__":

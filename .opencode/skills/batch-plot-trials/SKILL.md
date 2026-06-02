@@ -30,6 +30,9 @@ PhaseII_TestD_0002_c4/
 CSV headers required: `frame`, `t (s)`, `x (cm)`, `y (cm)`, `correct y`
 (or `correc y` — the typo is handled automatically by plot_trials.py).
 
+Trials are automatically aligned to Trial 1 using cross-correlation (shifts each
+signal to best match the first trial). Use `--no-align` to disable alignment.
+
 ## Workflow
 
 **Step 1 — Locate scripts**
@@ -62,6 +65,9 @@ python .opencode\skills\batch-plot-trials\scripts\batch_plot.py path\to\PhaseII_
 
 # Custom output directory for PNGs:
 python .opencode\skills\batch-plot-trials\scripts\batch_plot.py --parent path\to\data --output-dir path\to\plots
+
+# Skip cross-correlation alignment:
+python .opencode\skills\batch-plot-trials\scripts\batch_plot.py --parent path\to\data --no-align
 ```
 
 ## What to tell the user
