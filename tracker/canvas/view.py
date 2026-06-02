@@ -34,6 +34,7 @@ class CanvasView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setBackgroundBrush(Qt.black)
         self.setFocusPolicy(Qt.StrongFocus)
+        self.setCursor(Qt.CrossCursor)
         self._image_w = 0
         self._image_h = 0
         self._left_down = False
