@@ -1,5 +1,5 @@
 ---
-name: batch-plot-trials
+name: plot-trials-threshold
 description: >
   Batch-runs plot_trials.py across multiple folders of trial CSV files, producing
   one aligned PNG per folder. Use this skill whenever the user wants to process

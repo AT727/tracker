@@ -1,5 +1,5 @@
 """
-plot_trials.py
+plot_trials_correlation.py
 
 Usage:
     python plot_trials.py trial01.csv trial02.csv trial03.csv --output my_plot.png
