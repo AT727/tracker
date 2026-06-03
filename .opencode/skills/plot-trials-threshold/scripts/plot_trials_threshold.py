@@ -2,21 +2,22 @@
 plot_trials_threshold.py
 
 Usage:
-    python plot_trials.py trial01.csv trial02.csv trial03.csv --output my_plot.png
+    python plot_trials_threshold.py trial01.csv trial02.csv trial03.csv --output my_plot.png
 
-    # Threshold alignment (recommended for gradual-rise signals)
-    python plot_trials.py *.csv --output out.png --align-mode threshold
-    python plot_trials.py *.csv --output out.png --align-mode threshold --threshold 0.4
+    # Baseline normalization + threshold alignment (recommended when trials start at different water levels)
+    python plot_trials_threshold.py *.csv --output out.png --normalize-baseline
 
-    # First-peak alignment (for signals with a clear sharp crest)
-    python plot_trials.py *.csv --output out.png --align-mode peak
-    python plot_trials.py *.csv --output out.png --align-mode peak --prominence 0.5 --height 0.05
+    # Threshold alignment only (trials start at same water level)
+    python plot_trials_threshold.py *.csv --output out.png --align-mode threshold --threshold 0.4
 
-    # No alignment (raw timestamps)
-    python plot_trials.py *.csv --output out.png --no-align
+    # First-peak alignment
+    python plot_trials_threshold.py *.csv --output out.png --align-mode peak --prominence 0.5
+
+    # No alignment
+    python plot_trials_threshold.py *.csv --output out.png --no-align
 
 Each CSV must have headers: frame  t (s)  x (cm)  y (cm)  correct y  (or correc y)
-Plots "correct y" vs "t (s)" for each trial, with mean ± 1σ band and an RMSE table.
+Plots "correct y" vs "t (s)" for each trial, with mean +/- 1 sigma band and an RMSE table.
 The output filename (without extension) is used as the plot title.
 """
 
@@ -38,9 +39,7 @@ MEAN_COLOR   = "black"
 BAND_COLOR   = "#cccccc"
 
 TABLE_WIDTH_FRACTION = 0.22
-
-# How many samples at the start of the signal to use for baseline estimation
-BASELINE_SAMPLES = 50
+BASELINE_SAMPLES     = 50   # samples used to estimate still-water baseline
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -51,7 +50,6 @@ def load_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep=None, engine="python")
     df.columns = df.columns.str.strip()
 
-    # accept both "correct y" and "correc y" (common typo in source CSVs)
     rename = {col: "correct y" for col in df.columns if col.lower().startswith("correc")}
     if rename:
         df = df.rename(columns=rename)
@@ -61,6 +59,33 @@ def load_csv(path: str) -> pd.DataFrame:
     if missing:
         raise ValueError(f"{path}: missing columns {missing}. Found: {list(df.columns)}")
     return df[["t (s)", "correct y"]].dropna().reset_index(drop=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Baseline normalization
+# ─────────────────────────────────────────────────────────────────────────────
+
+def subtract_baseline(
+    df: pd.DataFrame,
+    baseline_samples: int = BASELINE_SAMPLES,
+) -> tuple[pd.DataFrame, float]:
+    """
+    Subtract the still-water baseline from "correct y".
+
+    Uses the 5th percentile of the full signal as the baseline estimate.
+    This is robust to cases where the first N samples do not represent true
+    still water (e.g. trial started mid-disturbance, or tracker zero varies).
+    The 5th percentile captures the lowest sustained level without being
+    pulled down by individual noise spikes.
+
+    Returns a new DataFrame and the baseline value that was removed.
+    The y-axis then represents wave height above still water.
+    """
+    y        = df["correct y"].values
+    baseline = float(np.percentile(y, 5))
+    df_out   = df.copy()
+    df_out["correct y"] = y - baseline
+    return df_out, float(baseline)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -95,16 +120,11 @@ def align_to_threshold(
     trials: list[pd.DataFrame],
     threshold_frac: float,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[int]]:
-    """
-    Shift each trial so its rising-edge threshold crossing lands at t=0.
-    Returns (t_arrays, y_arrays, crossing_indices).
-    """
     t_arrays, y_arrays, cross_idxs = [], [], []
 
     for df in trials:
-        t = df["t (s)"].values.copy()
-        y = df["correct y"].values.copy()
-
+        t   = df["t (s)"].values.copy()
+        y   = df["correct y"].values.copy()
         idx = find_threshold_crossing(y, threshold_frac)
         cross_idxs.append(idx)
         t_arrays.append(t - t[idx])
@@ -142,16 +162,11 @@ def align_to_first_peak(
     distance: int,
     height: float | None,
 ) -> tuple[list[np.ndarray], list[np.ndarray], list[int]]:
-    """
-    Shift each trial so its first prominent peak lands at t=0.
-    Returns (t_arrays, y_arrays, peak_indices).
-    """
     t_arrays, y_arrays, peak_idxs = [], [], []
 
     for df in trials:
-        t = df["t (s)"].values.copy()
-        y = df["correct y"].values.copy()
-
+        t   = df["t (s)"].values.copy()
+        y   = df["correct y"].values.copy()
         idx = find_first_prominent_peak(y, prominence, distance, height)
         peak_idxs.append(idx)
         t_arrays.append(t - t[idx])
@@ -161,7 +176,7 @@ def align_to_first_peak(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Common grid builder (shared by both alignment methods)
+# Common grid builder
 # ─────────────────────────────────────────────────────────────────────────────
 
 def build_common_grid(
@@ -186,7 +201,7 @@ def build_common_grid(
 
 def compute_rmse(signal: np.ndarray, reference: np.ndarray) -> float:
     min_len = min(len(signal), len(reference))
-    diff = signal[:min_len] - reference[:min_len]
+    diff    = signal[:min_len] - reference[:min_len]
     return float(np.sqrt(np.mean(diff ** 2)))
 
 
@@ -243,11 +258,12 @@ def build_table_ax(fig, gs_table, trial_labels, rmse_vals, nrmse_vals,
 def plot_trials(
     csv_paths: list[str],
     output_path: str,
-    align_mode: str = "threshold",   # "threshold" | "peak" | "none"
+    align_mode: str = "threshold",
     threshold_frac: float = 0.4,
     prominence: float = 1.0,
     distance: int = 5,
     height: float | None = None,
+    normalize_baseline: bool = False,
 ) -> None:
 
     trials       = [load_csv(p) for p in csv_paths]
@@ -255,18 +271,35 @@ def plot_trials(
     trial_labels = [f"Trial {i+1:02d}" for i in range(n)]
     n_pts        = max(len(df) for df in trials)
 
+    # ── baseline normalization ────────────────────────────────────────────────
+    # Must happen BEFORE alignment so threshold/peak detection operates on
+    # a zero-referenced signal, ensuring all trials trigger at the same
+    # absolute water-rise level.
+    if normalize_baseline:
+        print("  Baseline normalization:")
+        normalized = []
+        for i, df in enumerate(trials):
+            df_norm, bl = subtract_baseline(df)
+            print(f"    {trial_labels[i]}: still-water baseline = {bl:.4f} cm removed")
+            normalized.append(df_norm)
+        trials  = normalized
+        y_label = "Wave height above still water (cm)"
+    else:
+        y_label = "Water Elevation (cm)"
+
     # ── alignment ─────────────────────────────────────────────────────────────
     if align_mode == "threshold":
         t_arrays, y_arrays, ref_idxs = align_to_threshold(trials, threshold_frac)
         t_common, interp_signals = build_common_grid(t_arrays, y_arrays, n_pts)
 
+        print("  Threshold crossings:")
         for i, (df, idx) in enumerate(zip(trials, ref_idxs)):
             t_cross = df["t (s)"].values[idx]
             y_cross = df["correct y"].values[idx]
-            print(f"  {trial_labels[i]}: threshold crossing at "
-                  f"t={t_cross:.3f}s, y={y_cross:.4f}cm  (shift={-t_cross:+.3f}s)")
+            print(f"    {trial_labels[i]}: t={t_cross:.3f}s, y={y_cross:.4f}cm  "
+                  f"(shift={-t_cross:+.3f}s)")
 
-        x_label   = f"Time relative to {threshold_frac*100:.0f}% rise (s)"
+        x_label    = f"Time relative to {threshold_frac*100:.0f}% rise (s)"
         show_vline = True
 
     elif align_mode == "peak":
@@ -274,13 +307,14 @@ def plot_trials(
             trials, prominence, distance, height)
         t_common, interp_signals = build_common_grid(t_arrays, y_arrays, n_pts)
 
+        print("  First peaks:")
         for i, (df, idx) in enumerate(zip(trials, ref_idxs)):
             t_peak = df["t (s)"].values[idx]
             y_peak = df["correct y"].values[idx]
-            print(f"  {trial_labels[i]}: first peak at "
-                  f"t={t_peak:.3f}s, y={y_peak:.4f}cm  (shift={-t_peak:+.3f}s)")
+            print(f"    {trial_labels[i]}: t={t_peak:.3f}s, y={y_peak:.4f}cm  "
+                  f"(shift={-t_peak:+.3f}s)")
 
-        x_label   = "Time relative to first peak (s)"
+        x_label    = "Time relative to first peak (s)"
         show_vline = True
 
     else:  # none
@@ -336,7 +370,7 @@ def plot_trials(
     title = os.path.splitext(os.path.basename(output_path))[0]
     ax.set_title(title, fontsize=13, pad=10)
     ax.set_xlabel(x_label, fontsize=11)
-    ax.set_ylabel("Water Elevation (cm)", fontsize=11)
+    ax.set_ylabel(y_label, fontsize=11)
     ax.tick_params(labelsize=10)
 
     band_patch = mpatches.Patch(facecolor=BAND_COLOR, edgecolor="none", label="Mean ± 1σ")
@@ -357,7 +391,7 @@ def plot_trials(
     plt.savefig(output_path, dpi=150, bbox_inches="tight",
                 facecolor="white", edgecolor="none")
     plt.close()
-    print(f"Saved -> {output_path}")
+    print(f"Saved → {output_path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -366,15 +400,18 @@ def plot_trials(
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Plot aligned wave-height trials with mean ± 1σ and RMSE table.",
+        description="Plot aligned wave-height trials with mean +/- 1sigma and RMSE table.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Alignment modes:\n"
-            "  threshold  (default) Align to when signal first crosses baseline + N%% of rise.\n"
+            "  threshold  (default) Align to when signal first crosses baseline + N% of rise.\n"
             "                       Best for gradual-rise signals without a sharp crest.\n"
             "  peak                 Align to first prominent peak.\n"
             "                       Best for signals with a clear sharp wave crest.\n"
-            "  none                 No alignment — plot raw timestamps.\n"
+            "  none                 No alignment — plot raw timestamps.\n\n"
+            "Tip: use --normalize-baseline whenever trials started at different water levels.\n"
+            "     Baseline subtraction happens before alignment, so threshold detection\n"
+            "     sees a zero-referenced signal and triggers consistently across all trials.\n"
         ),
     )
     parser.add_argument("csvs", nargs="+", help="One or more CSV files.")
@@ -387,6 +424,12 @@ def main():
     parser.add_argument(
         "--align-mode", choices=["threshold", "peak", "none"], default="threshold",
         help="Alignment method (default: threshold)."
+    )
+    parser.add_argument(
+        "--normalize-baseline", action="store_true",
+        help="Subtract each trial's still-water baseline before alignment. "
+             "Use when trials genuinely started at different water levels. "
+             "Y-axis becomes 'Wave height above still water (cm)'."
     )
 
     thr = parser.add_argument_group("threshold alignment options")
@@ -427,6 +470,7 @@ def main():
         prominence=args.prominence,
         distance=args.distance,
         height=args.height,
+        normalize_baseline=args.normalize_baseline,
     )
 
 
