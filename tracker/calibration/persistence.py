@@ -1,103 +1,72 @@
+"""Load/save {video_stem}.json beside the MP4."""
+
 from __future__ import annotations
 
-import hashlib
 import json
-import os
-import tempfile
-from datetime import datetime
 from pathlib import Path
-from typing import List, Optional
-
-import cv2
 
 from tracker.calibration.data import CalibrationData
 
 
+def sidecar_path_for_video(video_path: str | Path) -> Path:
+    video = Path(video_path)
+    return video.with_suffix(".json")
+
+
 class CalibrationStore:
-    def __init__(self, directory: str = "calibrations"):
-        self.directory = directory
+    @staticmethod
+    def load(path: str | Path) -> CalibrationData | None:
+        p = Path(path)
+        if not p.is_file():
+            return None
+        with p.open(encoding="utf-8") as f:
+            data = json.load(f)
+        cal = CalibrationData(
+            stick_a_px=_tuple_or_none(data.get("stick_a_px")),
+            stick_b_px=_tuple_or_none(data.get("stick_b_px")),
+            known_length_cm=data.get("known_length_cm"),
+            origin_px=_tuple_or_none(data.get("origin_px")),
+            scale_cm_per_px=data.get("scale_cm_per_px"),
+        )
+        if cal.scale_cm_per_px is None and cal.stick_a_px and cal.stick_b_px:
+            cal.compute_scale()
+        return cal
 
-    def save(self, video_filename: str, calibration: CalibrationData) -> str:
-        Path(self.directory).mkdir(parents=True, exist_ok=True)
-        timestamp = datetime.now().isoformat()
-        safe_ts = timestamp.replace(":", "-")
-        video_basename = Path(video_filename).stem
-        filename = f"cal_{safe_ts}_{video_basename}.json"
-        filepath = Path(self.directory) / filename
-
-        data = calibration.to_dict()
-        data["metadata"] = {
-            "timestamp": timestamp,
-            "video_filename": video_filename,
+    @staticmethod
+    def save(path: str | Path, calibration: CalibrationData) -> None:
+        p = Path(path)
+        payload = {
+            "stick_a_px": list(calibration.stick_a_px) if calibration.stick_a_px else None,
+            "stick_b_px": list(calibration.stick_b_px) if calibration.stick_b_px else None,
+            "known_length_cm": calibration.known_length_cm,
+            "origin_px": list(calibration.origin_px) if calibration.origin_px else None,
+            "scale_cm_per_px": calibration.scale_cm_per_px,
         }
-        fd, tmp_path = tempfile.mkstemp(suffix=".json", dir=self.directory)
-        try:
-            with os.fdopen(fd, "w") as f:
-                json.dump(data, f, indent=2)
-            os.replace(tmp_path, str(filepath))
-        except BaseException:
-            if os.path.exists(tmp_path):
-                os.remove(tmp_path)
-            raise
-        return str(filepath)
+        with p.open("w", encoding="utf-8") as f:
+            json.dump(payload, f, indent=2)
 
-    def find_matching(self, video_path: str) -> Optional[CalibrationData]:
-        cap = cv2.VideoCapture(video_path)
-        ret, frame = cap.read()
-        cap.release()
-        if not ret:
-            return None
+    @staticmethod
+    def save_preset(calibration: CalibrationData) -> None:
+        path = preset_path()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        CalibrationStore.save(path, calibration)
 
-        frame_hash = hashlib.sha256(
-            cv2.imencode(".png", frame)[1].tobytes()
-        ).hexdigest()
+    @staticmethod
+    def load_preset() -> CalibrationData | None:
+        return CalibrationStore.load(preset_path())
 
-        saved_dir = Path(self.directory)
-        if not saved_dir.exists():
-            return None
+    @staticmethod
+    def clear_preset() -> None:
+        path = preset_path()
+        if path.exists():
+            path.unlink()
 
-        for json_file in sorted(saved_dir.glob("*.json")):
-            try:
-                with open(json_file) as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                continue
-            if data.get("video_frame0_hash") == frame_hash:
-                return CalibrationData.from_dict(data)
-            if data.get("video_frame0_hash"):
-                continue
 
-            stored_filename = data.get("metadata", {}).get("video_filename", "")
-            if Path(stored_filename).stem == Path(video_path).stem:
-                return CalibrationData.from_dict(data)
-
+def _tuple_or_none(value) -> tuple[float, float] | None:
+    if value is None:
         return None
+    return float(value[0]), float(value[1])
 
-    def list_available(self) -> List[dict]:
-        saved_dir = Path(self.directory)
-        if not saved_dir.exists():
-            return []
 
-        entries = []
-        for json_file in sorted(saved_dir.glob("*.json")):
-            try:
-                with open(json_file) as f:
-                    data = json.load(f)
-            except (json.JSONDecodeError, OSError):
-                continue
-            metadata = data.get("metadata", {})
-            entries.append({
-                "filename": json_file.name,
-                "timestamp": metadata.get("timestamp", ""),
-                "video_filename": metadata.get("video_filename", ""),
-            })
-        return entries
-
-    def delete(self, calibration_id: str) -> bool:
-        saved_dir = Path(self.directory)
-        for candidate in (calibration_id, f"{calibration_id}.json"):
-            path = saved_dir / candidate
-            if path.exists():
-                os.remove(path)
-                return True
-        return False
+def preset_path() -> Path:
+    return Path.home() / ".tracker" / "calibration_preset.json"

@@ -1,126 +1,142 @@
-from dataclasses import replace
-from typing import Optional
+"""Calibration finite state machine."""
 
-import numpy as np
-from PyQt5.QtCore import QObject, QPointF, pyqtSignal
+from __future__ import annotations
+
+from enum import Enum, auto
+from typing import Callable
+
+from PyQt5.QtWidgets import QInputDialog
 
 from tracker.calibration.data import CalibrationData
-from tracker.calibration.persistence import CalibrationStore
-from tracker.tracking.state import AppMode
 
 
-class CalibrationController(QObject):
-    mode_changed = pyqtSignal(AppMode)
-    endpoint_a_selected = pyqtSignal(object)
-    endpoint_b_selected = pyqtSignal(object)
-    calibration_complete = pyqtSignal(CalibrationData)
-    origin_set = pyqtSignal(object)
-    status_message = pyqtSignal(str)
+class CalibrationMode(Enum):
+    NONE = auto()
+    STICK_A = auto()
+    STICK_B = auto()
+    SET_ORIGIN = auto()
 
-    def __init__(self, store: Optional[CalibrationStore] = None, parent=None):
-        super().__init__(parent)
-        self._mode = AppMode.IDLE
-        self._endpoint_a: Optional[QPointF] = None
-        self._endpoint_b: Optional[QPointF] = None
-        self._scale: Optional[float] = None
-        self._use_stored_calibration = False
-        self._store = store or CalibrationStore()
-        self._calibration: Optional[CalibrationData] = None
+
+class CalibrationController:
+    def __init__(
+        self,
+        on_changed: Callable[[CalibrationData], None] | None = None,
+        on_mode_changed: Callable[[CalibrationMode], None] | None = None,
+    ) -> None:
+        self._data = CalibrationData()
+        self._mode = CalibrationMode.NONE
+        self._on_changed = on_changed
+        self._on_mode_changed = on_mode_changed
+        self._draft: tuple[float, float] | None = None
+        self._dragging = False
 
     @property
-    def mode(self) -> AppMode:
+    def data(self) -> CalibrationData:
+        return self._data
+
+    @property
+    def mode(self) -> CalibrationMode:
         return self._mode
 
-    def set_mode_transition(self, new_mode: AppMode):
-        if new_mode == AppMode.IDLE:
-            self._reset()
-        self._mode = new_mode
-        self.mode_changed.emit(new_mode)
+    @property
+    def draft(self) -> tuple[float, float] | None:
+        return self._draft
 
-    def on_canvas_click(self, scene_pos):
-        x, y = scene_pos.x(), scene_pos.y()
+    @property
+    def is_dragging(self) -> bool:
+        return self._dragging
 
-        if self._mode == AppMode.CALIBRATING_A:
-            self._endpoint_a = QPointF(x, y)
-            self.set_mode_transition(AppMode.CALIBRATING_B)
-            self.endpoint_a_selected.emit(self._endpoint_a)
-            self.status_message.emit("Point A set. Click to set point B.")
+    def set_data(self, data: CalibrationData) -> None:
+        self._data = data
+        self._draft = None
+        self._dragging = False
+        self._notify_changed()
 
-        elif self._mode == AppMode.CALIBRATING_B:
-            if self._endpoint_a and QPointF(x, y) == self._endpoint_a:
-                self.status_message.emit("Point B must differ from point A.")
-                return
-            self._endpoint_b = QPointF(x, y)
-            self.endpoint_b_selected.emit(self._endpoint_b)
-            pixel_dist = np.sqrt(
-                (x - self._endpoint_a.x()) ** 2 + (y - self._endpoint_a.y()) ** 2
+    def start_stick_calibration(self) -> None:
+        self._data.stick_a_px = None
+        self._data.stick_b_px = None
+        self._draft = None
+        self._dragging = False
+        self._set_mode(CalibrationMode.STICK_A)
+
+    def start_origin_calibration(self) -> None:
+        self._draft = None
+        self._dragging = False
+        self._set_mode(CalibrationMode.SET_ORIGIN)
+
+    def cancel(self) -> None:
+        self._draft = None
+        self._dragging = False
+        self._set_mode(CalibrationMode.NONE)
+
+    def begin_point(self) -> bool:
+        """Start placing a calibration point. Returns True if consumed."""
+        if self._mode == CalibrationMode.NONE:
+            return False
+        self._dragging = True
+        self._draft = None
+        return True
+
+    def update_draft(self, px: float, py: float) -> bool:
+        """Update draft position while dragging. Returns True if consumed."""
+        if not self._dragging or self._mode == CalibrationMode.NONE:
+            return False
+        self._draft = (px, py)
+        self._notify_changed()
+        return True
+
+    def commit_point(self, px: float, py: float, parent_widget=None) -> bool:
+        """Commit calibration point on release. Returns True if consumed."""
+        if self._mode == CalibrationMode.NONE:
+            return False
+        self._dragging = False
+        self._draft = None
+
+        if self._mode == CalibrationMode.STICK_A:
+            self._data.stick_a_px = (px, py)
+            self._set_mode(CalibrationMode.STICK_B)
+            self._notify_changed()
+            return True
+        if self._mode == CalibrationMode.STICK_B:
+            self._data.stick_b_px = (px, py)
+            self._notify_changed()
+            length, ok = QInputDialog.getDouble(
+                parent_widget,
+                "Known Length",
+                "Tape measure length (cm):",
+                10.0,
+                0.01,
+                10000.0,
+                2,
             )
-            self._pixel_distance = pixel_dist
-            self.status_message.emit(f"Points set. Distance: {pixel_dist:.1f} px. Enter known length.")
-
-        elif self._mode == AppMode.SETTING_ORIGIN:
-            self._origin = QPointF(x, y)
-            self.origin_set.emit(self._origin)
-            if self._calibration is not None:
-                self._calibration = replace(self._calibration, origin_px=(x, y))
-            self.set_mode_transition(AppMode.TRACKING)
-            self.status_message.emit("Origin set. Ready to track.")
-
-    def on_set_known_length(self, length: float, unit: str = "m"):
-        if self._mode != AppMode.CALIBRATING_B:
-            return
-        if length <= 0:
-            self.status_message.emit("Length must be positive.")
-            return
-        if self._endpoint_a is None or self._endpoint_b is None:
-            return
-
-        try:
-            calibration = CalibrationData.from_endpoints(
-                endpoint_a=(self._endpoint_a.x(), self._endpoint_a.y()),
-                endpoint_b=(self._endpoint_b.x(), self._endpoint_b.y()),
-                known_length=length,
-                unit=unit,
-            )
-        except (ValueError, ZeroDivisionError) as e:
-            self.status_message.emit(str(e))
-            return
-
-        self._calibration = calibration
-        self.calibration_complete.emit(calibration)
-        self.set_mode_transition(AppMode.SETTING_ORIGIN)
-        self.status_message.emit(
-            f"Calibration: {calibration.scale:.6f} {unit}/px. "
-            f"Click to set origin."
-        )
-
-    def load_calibration(self, calibration: CalibrationData, video_path: str):
-        self._calibration = calibration
-        self._use_stored_calibration = True
-        self.calibration_complete.emit(calibration)
-        self.set_mode_transition(AppMode.SETTING_ORIGIN)
-        self.status_message.emit(
-            f"Loaded calibration (scale: {calibration.scale:.6f}). Click to set origin."
-        )
-
-    def save_current(self, video_path: str) -> Optional[str]:
-        if self._calibration is None:
-            self.status_message.emit("No calibration to save.")
-            return None
-        path = self._store.save(video_path, self._calibration)
-        self.status_message.emit(f"Calibration saved: {path}")
-        return path
-
-    def try_auto_load(self, video_path: str) -> bool:
-        cal = self._store.find_matching(video_path)
-        if cal is not None:
-            self.load_calibration(cal, video_path)
+            if not ok:
+                self._data.stick_b_px = None
+                self._set_mode(CalibrationMode.STICK_A)
+                self._notify_changed()
+                return True
+            self._data.known_length_cm = length
+            self._data.compute_scale()
+            self._set_mode(CalibrationMode.SET_ORIGIN)
+            self._notify_changed()
+            return True
+        if self._mode == CalibrationMode.SET_ORIGIN:
+            self._data.origin_px = (px, py)
+            self._set_mode(CalibrationMode.NONE)
+            self._notify_changed()
             return True
         return False
 
-    def _reset(self):
-        self._endpoint_a = None
-        self._endpoint_b = None
-        self._calibration = None
-        self._use_stored_calibration = False
-        self._mode = AppMode.IDLE
+    def handle_click(self, px: float, py: float, parent_widget=None) -> bool:
+        """Legacy single-click path; delegates to commit for compatibility."""
+        if self._mode == CalibrationMode.NONE:
+            return False
+        return self.commit_point(px, py, parent_widget)
+
+    def _set_mode(self, mode: CalibrationMode) -> None:
+        self._mode = mode
+        if self._on_mode_changed:
+            self._on_mode_changed(mode)
+
+    def _notify_changed(self) -> None:
+        if self._on_changed:
+            self._on_changed(self._data)

@@ -1,37 +1,33 @@
-import pytest
-from PyQt5.QtCore import Qt
+from unittest.mock import MagicMock, patch
+
 from tracker.app.main_window import MainWindow
+from tracker.mutations.models import ColumnMutation
 
 
-def test_main_window_creation(qtbot):
+def test_main_window_has_mutations_attribute(qtbot):
     window = MainWindow()
     qtbot.addWidget(window)
-    assert window.windowTitle() == "Tracker"
-    assert window._view is not None
+    assert isinstance(window._mutations, list)
 
 
-def test_main_window_has_menu(qtbot):
-    window = MainWindow()
-    qtbot.addWidget(window)
-    menubar = window.menuBar()
-    actions = [a.text() for a in menubar.actions()]
-    assert any("File" in a for a in actions)
-    assert any("View" in a for a in actions)
+def test_main_window_loads_mutations_from_store(qtbot):
+    expected = [
+        ColumnMutation(name="norm_x", formula="x * 2"),
+    ]
+    with patch("tracker.app.main_window.MutationStore.load", return_value=expected):
+        window = MainWindow()
+        qtbot.addWidget(window)
+    assert window._mutations == expected
 
 
-def test_main_window_initial_state(qtbot):
-    window = MainWindow()
-    qtbot.addWidget(window)
-    assert window._current_frame == 0
-    assert window._collector is not None
-    assert window._data_table is not None
-    assert window._plot_panel is not None
+def test_main_window_refresh_table_passes_mutations(qtbot):
+    mutations = [ColumnMutation(name="m", formula="x + 1")]
+    with patch("tracker.app.main_window.MutationStore.load", return_value=mutations):
+        window = MainWindow()
+        qtbot.addWidget(window)
 
+    with patch.object(window._data_table, "refresh") as mock_refresh:
+        window._refresh_table()
 
-def test_main_window_keyboard_navigation_not_crash(qtbot):
-    window = MainWindow()
-    qtbot.addWidget(window)
-    window.keyPressEvent(
-        type('evt', (), {'key': lambda self=0: Qt.Key_Right, 'isAccepted': lambda: False})()
-    )
-    assert True
+    _, kwargs = mock_refresh.call_args
+    assert kwargs.get("mutations") == mutations

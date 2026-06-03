@@ -1,72 +1,52 @@
+"""Calibration data model."""
+
 from __future__ import annotations
+
+import math
 from dataclasses import dataclass
-from typing import Tuple
+from typing import Optional
 
 
-@dataclass(frozen=True)
+@dataclass
 class CalibrationData:
-    stick_endpoint_a_px: Tuple[float, float]
-    stick_endpoint_b_px: Tuple[float, float]
-    known_length: float
-    known_unit: str
-    origin_px: Tuple[float, float]
-    axis_rotation_deg: float
-    pixel_distance: float
-    scale: float
-    video_frame0_hash: str = ""
+    """Stick endpoints, origin, and scale in cm per pixel."""
 
-    @classmethod
-    def from_endpoints(
-        cls,
-        endpoint_a: Tuple[float, float],
-        endpoint_b: Tuple[float, float],
-        known_length: float,
-        unit: str = "m",
-    ) -> "CalibrationData":
-        dx = endpoint_b[0] - endpoint_a[0]
-        dy = endpoint_b[1] - endpoint_a[1]
-        pixel_distance = (dx**2 + dy**2) ** 0.5
-        if pixel_distance == 0:
-            raise ValueError("Endpoints are identical; pixel_distance must be > 0")
-        scale = known_length / pixel_distance
-        return cls(
-            stick_endpoint_a_px=endpoint_a,
-            stick_endpoint_b_px=endpoint_b,
-            known_length=known_length,
-            known_unit=unit,
-            origin_px=(0.0, 0.0),
-            axis_rotation_deg=0.0,
-            pixel_distance=pixel_distance,
-            scale=scale,
+    stick_a_px: Optional[tuple[float, float]] = None
+    stick_b_px: Optional[tuple[float, float]] = None
+    known_length_cm: Optional[float] = None
+    origin_px: Optional[tuple[float, float]] = None
+    scale_cm_per_px: Optional[float] = None
+
+    @property
+    def is_calibrated(self) -> bool:
+        return (
+            self.stick_a_px is not None
+            and self.stick_b_px is not None
+            and self.known_length_cm is not None
+            and self.known_length_cm > 0
+            and self.origin_px is not None
+            and self.scale_cm_per_px is not None
+            and self.scale_cm_per_px > 0
         )
 
     @property
-    def is_valid(self) -> bool:
-        return self.pixel_distance > 0 and self.scale > 0
+    def has_scale(self) -> bool:
+        return self.scale_cm_per_px is not None and self.scale_cm_per_px > 0
 
-    def to_dict(self) -> dict:
-        return {
-            "stick_endpoint_a_px": list(self.stick_endpoint_a_px),
-            "stick_endpoint_b_px": list(self.stick_endpoint_b_px),
-            "known_length": self.known_length,
-            "known_unit": self.known_unit,
-            "origin_px": list(self.origin_px),
-            "axis_rotation_deg": self.axis_rotation_deg,
-            "pixel_distance": self.pixel_distance,
-            "scale": self.scale,
-            "video_frame0_hash": self.video_frame0_hash,
-        }
-
-    @classmethod
-    def from_dict(cls, data: dict) -> "CalibrationData":
-        return cls(
-            stick_endpoint_a_px=tuple(data["stick_endpoint_a_px"]),
-            stick_endpoint_b_px=tuple(data["stick_endpoint_b_px"]),
-            known_length=data["known_length"],
-            known_unit=data["known_unit"],
-            origin_px=tuple(data["origin_px"]),
-            axis_rotation_deg=data["axis_rotation_deg"],
-            pixel_distance=data["pixel_distance"],
-            scale=data["scale"],
-            video_frame0_hash=data.get("video_frame0_hash", ""),
-        )
+    def compute_scale(self) -> None:
+        """Derive scale_cm_per_px from stick endpoints and known length."""
+        if (
+            self.stick_a_px is None
+            or self.stick_b_px is None
+            or self.known_length_cm is None
+            or self.known_length_cm <= 0
+        ):
+            self.scale_cm_per_px = None
+            return
+        dx = self.stick_b_px[0] - self.stick_a_px[0]
+        dy = self.stick_b_px[1] - self.stick_a_px[1]
+        px_dist = math.hypot(dx, dy)
+        if px_dist <= 0:
+            self.scale_cm_per_px = None
+            return
+        self.scale_cm_per_px = self.known_length_cm / px_dist
