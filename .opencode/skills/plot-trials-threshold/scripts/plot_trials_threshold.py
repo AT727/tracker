@@ -357,7 +357,7 @@ def plot_trials(
     plt.savefig(output_path, dpi=150, bbox_inches="tight",
                 facecolor="white", edgecolor="none")
     plt.close()
-    print(f"Saved → {output_path}")
+    print(f"Saved -> {output_path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
