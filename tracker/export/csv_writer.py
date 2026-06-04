@@ -21,7 +21,7 @@ def export_csv(
     if not pipeline.calibration.is_calibrated:
         raise ValueError("Calibration is required before exporting CSV data in centimeters.")
 
-    base_headers = ["frame", "t (s)", "x (cm)", "y (cm)"]
+    base_headers = ["frame", "t", "x (cm)", "y (cm)"]
     with p.open("w", newline="", encoding="utf-8") as f:
         writer = csv.writer(f)
         writer.writerow(base_headers + [m.name for m in mutations])
