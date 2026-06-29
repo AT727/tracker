@@ -49,6 +49,7 @@ class WaveAlignerWindow(QMainWindow):
         self._trial_widgets: dict[Trial, dict] = {}
         self._axis_history: list[tuple] = []
         self._axis_history_index: int = -1
+        self._shift_limit: float = 30.0
         self._build_ui()
         self._build_menus()
 
@@ -86,6 +87,18 @@ class WaveAlignerWindow(QMainWindow):
         toolbar_layout.addWidget(self._redo_btn)
         toolbar_layout.addWidget(edit_axes_btn)
         toolbar_layout.addStretch()
+
+        limit_label = QLabel("\u23F1")
+        limit_label.setToolTip("Max time shift (\u00b1s)")
+        self._shift_spin = QDoubleSpinBox()
+        self._shift_spin.setRange(1.0, 100.0)
+        self._shift_spin.setSingleStep(5.0)
+        self._shift_spin.setDecimals(1)
+        self._shift_spin.setValue(self._shift_limit)
+        self._shift_spin.setSuffix(" s")
+        self._shift_spin.valueChanged.connect(self._on_shift_limit_changed)
+        toolbar_layout.addWidget(limit_label)
+        toolbar_layout.addWidget(self._shift_spin)
         left_layout.addLayout(toolbar_layout)
 
         # ── Right: scrollable control panel ──
@@ -196,7 +209,7 @@ class WaveAlignerWindow(QMainWindow):
 
         # Spinbox for precise entry
         spin = QDoubleSpinBox()
-        spin.setRange(-10.0, 10.0)
+        spin.setRange(-self._shift_limit, self._shift_limit)
         spin.setSingleStep(0.01)
         spin.setDecimals(3)
         spin.setValue(0.0)
@@ -204,7 +217,8 @@ class WaveAlignerWindow(QMainWindow):
 
         # Slider for quick drag
         slider = QSlider(Qt.Horizontal)
-        slider.setRange(-1000, 1000)
+        limit = int(self._shift_limit * 100)
+        slider.setRange(-limit, limit)
         slider.setValue(0)
         slider.valueChanged.connect(
             lambda val, t=trial, sp=spin, sl=shift_label: self._on_slider_dragged(t, val, sp, sl)
@@ -292,6 +306,13 @@ class WaveAlignerWindow(QMainWindow):
     def _rename_trials(self) -> None:
         for i, trial in enumerate(self._collection.trials):
             trial.label = f"Trial {i + 1:02d}"
+
+    def _on_shift_limit_changed(self, value: float) -> None:
+        self._shift_limit = value
+        limit_int = int(value * 100)
+        for w in self._trial_widgets.values():
+            w["spin"].setRange(-value, value)
+            w["slider"].setRange(-limit_int, limit_int)
 
     def _on_export_graph(self) -> None:
         path, _ = QFileDialog.getSaveFileName(
@@ -383,10 +404,10 @@ class WaveAlignerWindow(QMainWindow):
         collection = self._collection
         visible = collection.visible_trials
 
-        # Full data for display
-        t_arrays = [t.df["t (s)"].values - t.shift_s for t in collection.trials]
-        y_arrays = [t.df["correct y"].values for t in collection.trials]
-        trial_labels = [t.label for t in collection.trials]
+        # Full data for display (visible only)
+        t_arrays = [t.df["t (s)"].values - t.shift_s for t in collection.visible_trials]
+        y_arrays = [t.df["correct y"].values for t in collection.visible_trials]
+        trial_labels = [t.label for t in collection.visible_trials]
 
         # Aligned signals + stats (visible trials only, overlap region)
         interp_signals = collection.aligned_signals(visible_only=True)
@@ -397,17 +418,9 @@ class WaveAlignerWindow(QMainWindow):
         }
         _, _, t_common = collection.overlap_region(visible_only=True)
 
-        # Pad rmse/nrmse to match all trials (non-visible get None)
-        rmse_vals, nrmse_vals = [], []
-        vi = 0
-        for t in collection.trials:
-            if t.visible:
-                rmse_vals.append(stats["rmse_vals"][vi] if vi < len(stats["rmse_vals"]) else None)
-                nrmse_vals.append(stats["nrmse_vals"][vi] if vi < len(stats["nrmse_vals"]) else None)
-                vi += 1
-            else:
-                rmse_vals.append(None)
-                nrmse_vals.append(None)
+        # RMSE/NRMSE values only for visible trials
+        rmse_vals = stats["rmse_vals"]
+        nrmse_vals = stats["nrmse_vals"]
 
         # Close previous figure to avoid memory leak
         if self._fig is not None:

@@ -85,6 +85,8 @@ class TrialCollection:
 
     def overlap_region(self, visible_only: bool = True) -> tuple[float, float, np.ndarray]:
         trials = self.visible_trials if visible_only else self.trials
+        if not trials:
+            return 0.0, 1.0, np.array([0.0, 1.0])
         if len(trials) < 2:
             t_min = min(t.df["t (s)"].min() - t.shift_s for t in trials)
             t_max = max(t.df["t (s)"].max() - t.shift_s for t in trials)
