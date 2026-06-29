@@ -34,7 +34,9 @@ class CanvasView(QGraphicsView):
         self.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
         self.setBackgroundBrush(Qt.black)
         self.setFocusPolicy(Qt.StrongFocus)
-        self.setCursor(self._make_hollow_dot_cursor())
+        self._red_cursor = self._make_hollow_dot_cursor()
+        self._green_cursor = self._make_hollow_green_cursor()
+        self.setCursor(self._red_cursor)
         self._image_w = 0
         self._image_h = 0
         self._left_down = False
@@ -50,6 +52,24 @@ class CanvasView(QGraphicsView):
         painter.drawEllipse(1, 1, size - 2, size - 2)
         painter.end()
         return QCursor(pixmap, size // 2, size // 2)
+
+    @staticmethod
+    def _make_hollow_green_cursor() -> QCursor:
+        size = 20
+        pixmap = QPixmap(size, size)
+        pixmap.fill(Qt.transparent)
+        painter = QPainter(pixmap)
+        painter.setRenderHint(QPainter.Antialiasing)
+        painter.setPen(QPen(QColor("#30d158"), 2))
+        painter.drawEllipse(1, 1, size - 2, size - 2)
+        painter.end()
+        return QCursor(pixmap, size // 2, size // 2)
+
+    def flash_cursor_green(self) -> None:
+        self.setCursor(self._green_cursor)
+
+    def restore_cursor(self) -> None:
+        self.setCursor(self._red_cursor)
 
     @property
     def tracker_scene(self) -> TrackerScene:
@@ -137,8 +157,8 @@ class CanvasView(QGraphicsView):
         return None
 
     def _event_to_scene(self, pos) -> QPointF:
-        vp_pos = self.viewport().mapFrom(self, pos)
-        return self.mapToScene(vp_pos)
+        """Convert viewport-local mouse pos to scene coords via QGraphicsView."""
+        return self.mapToScene(pos)
 
     def _apply_transform(self) -> None:
         self.setTransform(self._viewport.to_transform())

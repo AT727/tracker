@@ -3,6 +3,9 @@
 ## Package Source Reference
 - Use opensrc path <pkg> to read dependency source when you need implementation details
 
+## Context7
+- Always use context7 when coding with a library such as OpenCV or matplotlib for most accurate code
+
 ## Superpowers
 - Always use superpowers for all tasks
 - Never do version control. I handle all of it

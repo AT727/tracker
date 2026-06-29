@@ -51,6 +51,10 @@ def load_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep=None, engine="python")
     df.columns = df.columns.str.strip()
  
+    # Normalize "t" → "t (s)" if found without units
+    if "t" in df.columns and "t (s)" not in df.columns:
+        df = df.rename(columns={"t": "t (s)"})
+
     # Prefer "correct y" / "correc y" if present, fall back to "y (cm)"
     rename = {col: "correct y" for col in df.columns if col.lower().startswith("correc")}
     if rename:
@@ -58,7 +62,7 @@ def load_csv(path: str) -> pd.DataFrame:
     elif "y (cm)" in df.columns:
         df = df.rename(columns={"y (cm)": "correct y"})
  
-    required = {"t", "correct y"}
+    required = {"t (s)", "correct y"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(
@@ -66,7 +70,7 @@ def load_csv(path: str) -> pd.DataFrame:
             f"  Expected: 't' and one of 'correct y', 'correc y', 'y (cm)'\n"
             f"  Found:    {list(df.columns)}"
         )
-    return df[["t", "correct y"]].dropna().reset_index(drop=True)
+    return df[["t (s)", "correct y"]].dropna().reset_index(drop=True)
 
 
 # ─────────────────────────────────────────────────────────────────────────────

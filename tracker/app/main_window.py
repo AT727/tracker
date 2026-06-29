@@ -368,14 +368,12 @@ class MainWindow(QMainWindow):
                 self._calibration.update_draft(px, py)
                 self._update_overlays()
         else:
-            self._canvas.tracker_scene.show_click_feedback(px, py)
+            self._canvas.flash_cursor_green()
 
     def _on_pixel_moved(self, px: float, py: float) -> None:
         if self._calibration.mode != CalibrationMode.NONE:
             if self._calibration.update_draft(px, py):
                 self._update_overlays()
-        else:
-            self._canvas.tracker_scene.show_click_feedback(px, py)
 
     def _on_pixel_released(self, px: float, py: float) -> None:
         if self._calibration.mode != CalibrationMode.NONE:
@@ -389,6 +387,7 @@ class MainWindow(QMainWindow):
                     )
             return
 
+        self._canvas.restore_cursor()
         self._record_click_at(px, py)
 
     def _record_click_at(self, px: float, py: float) -> None:
@@ -412,7 +411,9 @@ class MainWindow(QMainWindow):
         pixel = self._current_canvas_pixel()
         if pixel is None:
             return
+        self._canvas.flash_cursor_green()
         self._record_click_at(pixel[0], pixel[1])
+        self._canvas.restore_cursor()
 
     def _current_canvas_pixel(self) -> tuple[float, float] | None:
         view_pos = self._canvas.viewport().mapFromGlobal(QCursor.pos())
@@ -493,7 +494,6 @@ class MainWindow(QMainWindow):
             self._decoder.request_frame(index)
         if prefetch:
             self._decoder.prefetch(index + 1, 5)
-        self._canvas.tracker_scene.clear_click_feedback()
         self._refresh_marks_on_canvas()
         self._update_status()
 
@@ -545,13 +545,17 @@ class MainWindow(QMainWindow):
     def _update_overlays(self) -> None:
         scene = self._canvas.tracker_scene
         cal = self._calibration.data
+        # Local copies for snapshot isolation from in-place mutation
+        stick_a_px = cal.stick_a_px
+        stick_b_px = cal.stick_b_px
+        origin_px = cal.origin_px
         mode = self._calibration.mode
         draft = self._calibration.draft
         scene.set_stick_visible(self._show_stick.isChecked())
         scene.set_grid_visible(self._show_grid.isChecked())
 
-        stick_a = cal.stick_a_px
-        stick_b = cal.stick_b_px
+        stick_a = stick_a_px
+        stick_b = stick_b_px
         if mode == CalibrationMode.STICK_A and draft:
             stick_a = draft
         elif mode == CalibrationMode.STICK_B and draft:
@@ -569,8 +573,8 @@ class MainWindow(QMainWindow):
         grid_oy: float | None = None
         if mode == CalibrationMode.SET_ORIGIN and draft:
             grid_ox, grid_oy = draft
-        elif cal.origin_px:
-            grid_ox, grid_oy = cal.origin_px
+        elif origin_px:
+            grid_ox, grid_oy = origin_px
         elif mode == CalibrationMode.SET_ORIGIN and cal.stick_a_px and cal.stick_b_px:
             ax, ay = cal.stick_a_px
             bx, by = cal.stick_b_px

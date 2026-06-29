@@ -64,3 +64,36 @@ def test_upsert_mark_is_scoped_per_series():
     assert len(collector.marks) == 2
     assert len(collector.marks_for_series(base_series)) == 1
     assert len(collector.marks_for_series(second_series.id)) == 1
+
+
+def test_add_series_without_activate():
+    collector = TrackingCollector()
+    original = collector.active_series_id
+    s = collector.add_series("Silent", activate=False)
+    assert collector.active_series_id == original
+    assert s.id in [s_.id for s_ in collector.series]
+
+
+def test_upsert_uses_dict_for_consistency():
+    collector = TrackingCollector()
+    s1 = collector.active_series_id
+    s2 = collector.add_series("B", activate=False)
+
+    collector.upsert_mark(1, 0.0, 10.0, 20.0)  # s1, frame 1
+    collector.upsert_mark(1, 0.1, 30.0, 40.0, series_id=s2.id)  # s2, frame 1
+    assert len(collector.marks) == 2
+
+    collector.upsert_mark(1, 0.2, 50.0, 60.0)  # s1, frame 1 — replace
+    assert len(collector.marks) == 2
+    assert collector.marks[0].px == pytest.approx(50.0)
+
+
+def test_clear_marks_resets_dict():
+    collector = TrackingCollector()
+    collector.upsert_mark(0, 0.0, 1.0, 2.0)
+    collector.clear_marks()
+    assert len(collector.marks) == 0
+    # Subsequent upsert on same key should be treated as new
+    mark, replaced = collector.upsert_mark(0, 0.5, 3.0, 4.0)
+    assert not replaced
+    assert len(collector.marks) == 1

@@ -75,7 +75,7 @@ class AutoClickerController(QObject):
 
     def __init__(self, parent: QObject | None = None) -> None:
         super().__init__(parent)
-        self._enabled = False
+        self._enabled = True
         self._mapping: dict[int, int] = dict(DEFAULT_KEY_CPS)
         self._timers: dict[int, QTimer] = {}
         self._held_keys: set[int] = set()

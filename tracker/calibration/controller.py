@@ -18,6 +18,7 @@ class CalibrationMode(Enum):
 
 
 class CalibrationController:
+    """FSM: NONE → STICK_A → STICK_B → SET_ORIGIN → NONE."""
     def __init__(
         self,
         on_changed: Callable[[CalibrationData], None] | None = None,
@@ -86,7 +87,13 @@ class CalibrationController:
         return True
 
     def commit_point(self, px: float, py: float, parent_widget=None) -> bool:
-        """Commit calibration point on release. Returns True if consumed."""
+        """Commit calibration point on release. Returns True if consumed.
+
+        Note: The QInputDialog.getDouble call for length (STICK_B path) is a
+        synchronous modal dialog. Qt re-enters the event loop while it is
+        shown, so mouse-release processing pauses but the UI stays responsive.
+        This is acceptable for the current drag-and-drop calibration flow.
+        """
         if self._mode == CalibrationMode.NONE:
             return False
         self._dragging = False

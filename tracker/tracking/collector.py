@@ -1,4 +1,4 @@
-"""Append-only mark collection with point series management."""
+"""Append-only mark collection with O(1) upsert via (series, frame) key dict."""
 
 from __future__ import annotations
 
@@ -12,6 +12,7 @@ class TrackingCollector:
     def __init__(self) -> None:
         self._series: dict[str, PointSeries] = {}
         self._marks: list[Mark] = []
+        self._marks_by_key: dict[tuple[str, int], int] = {}
         self._active_series_id: Optional[str] = None
         self._ensure_default_series()
 
@@ -36,10 +37,11 @@ class TrackingCollector:
     def get_series(self, series_id: str) -> Optional[PointSeries]:
         return self._series.get(series_id)
 
-    def add_series(self, label: str | None = None, color: str | None = None) -> PointSeries:
+    def add_series(self, label: str | None = None, color: str | None = None, activate: bool = True) -> PointSeries:
         s = PointSeries.create(label=label, color=color)
         self._series[s.id] = s
-        self._active_series_id = s.id
+        if activate:
+            self._active_series_id = s.id
         return s
 
     def set_active_series(self, series_id: str) -> None:
@@ -70,33 +72,28 @@ class TrackingCollector:
         py: float,
         series_id: str | None = None,
     ) -> tuple[Mark, bool]:
-        """Insert or replace a mark for one (series, frame) pair."""
+        """Insert or replace a mark for one (series, frame) pair in O(1) average."""
         sid = series_id or self._active_series_id
         if sid is None or sid not in self._series:
             raise ValueError("No active series")
         mark = Mark(frame=frame, timestamp_s=timestamp_s, px=px, py=py, series_id=sid)
-        match_indices = [
-            idx
-            for idx, existing in enumerate(self._marks)
-            if existing.series_id == sid and existing.frame == frame
-        ]
-        if not match_indices:
-            self._marks.append(mark)
-            return mark, False
+        key = (sid, frame)
 
-        # Replace the newest existing mark and drop older duplicates so each
-        # (series, frame) pair remains unique.
-        replace_at = match_indices[-1]
-        self._marks[replace_at] = mark
-        for idx in reversed(match_indices[:-1]):
-            del self._marks[idx]
-        return mark, True
+        existing_idx = self._marks_by_key.get(key)
+        if existing_idx is not None:
+            self._marks[existing_idx] = mark
+            return mark, True
+
+        self._marks.append(mark)
+        self._marks_by_key[key] = len(self._marks) - 1
+        return mark, False
 
     def marks_for_series(self, series_id: str) -> list[Mark]:
         return [m for m in self._marks if m.series_id == series_id]
 
     def clear_marks(self) -> None:
         self._marks.clear()
+        self._marks_by_key.clear()
 
     def iter_marks(self) -> Iterable[Mark]:
         return iter(self._marks)
