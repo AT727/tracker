@@ -47,6 +47,7 @@ from tracker.mutations.persistence import MutationStore
 from tracker.panels.data_table import DataTablePanel
 from tracker.panels.plot_panel import PlotPanel
 from tracker.panels.series_toolbar import SeriesToolbar
+from tracker.persistence.progress import ProgressStore
 from tracker.tracking.collector import TrackingCollector
 from tracker.tracking.mark import Mark
 from tracker.video.decoder_worker import VideoDecoderWorker
@@ -220,6 +221,15 @@ class MainWindow(QMainWindow):
         export_action = QAction("Export CSV...", self)
         export_action.triggered.connect(self._export_csv)
         file_menu.addAction(export_action)
+        file_menu.addSeparator()
+        self._save_progress_action = QAction("Save Progress...", self)
+        self._save_progress_action.triggered.connect(self._save_progress)
+        self._save_progress_action.setEnabled(False)
+        file_menu.addAction(self._save_progress_action)
+        self._load_progress_action = QAction("Load Progress...", self)
+        self._load_progress_action.triggered.connect(self._load_progress)
+        file_menu.addAction(self._load_progress_action)
+        file_menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
@@ -325,6 +335,7 @@ class MainWindow(QMainWindow):
         self.collector.clear_marks()
         self._marks_by_frame.clear()
         self._refresh_panels()
+        self._save_progress_action.setEnabled(True)
         self._update_overlays()
 
     def _on_video_opened(self, fps: float, frame_count: int, width: int, height: int) -> None:
@@ -715,6 +726,69 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Export", str(exc))
             return
         QMessageBox.information(self, "Export", f"Saved to {path}")
+
+    def _save_progress(self) -> None:
+        if not self._video_path:
+            return
+        default_name = self._video_path.with_suffix(".tracker.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Progress",
+            str(default_name),
+            "Tracker Progress Files (*.tracker.json)",
+        )
+        if not path:
+            return
+        try:
+            ProgressStore.save(path, self.collector)
+            self._status.showMessage(f"Progress saved to {path}", 5000)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save Error", f"Failed to save progress:\n{exc}")
+
+    def _load_progress(self) -> None:
+        if not self._video_path:
+            return
+        if self.collector.marks:
+            reply = QMessageBox.question(
+                self,
+                "Load Progress",
+                "This will replace all current marks. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Progress",
+            str(self._video_path.parent),
+            "Tracker Progress Files (*.tracker.json)",
+        )
+        if not path:
+            return
+        data = ProgressStore.load(path)
+        if data is None:
+            QMessageBox.warning(
+                self,
+                "Load Error",
+                "Could not load progress file. The file may be missing or corrupt.",
+            )
+            return
+        self.collector.load_from(
+            series_list=data["series"],
+            marks_list=data["marks"],
+            active_series_id=data["active_series_id"],
+        )
+        self._rebuild_marks_by_frame()
+        self._refresh_panels()
+        self._update_overlays()
+        self._refresh_marks_on_canvas()
+        self._status.showMessage(f"Progress loaded from {path}", 5000)
+
+    def _rebuild_marks_by_frame(self) -> None:
+        self._marks_by_frame.clear()
+        for mark in self.collector.marks:
+            self._marks_by_frame.setdefault(mark.frame, []).append(mark)
 
     def _save_preset(self) -> None:
         if not self._calibration.data.is_calibrated:

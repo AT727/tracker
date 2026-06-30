@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -106,3 +107,17 @@ class TrialCollection:
             np.interp(t_common, t.df["t (s)"].values - t.shift_s, t.df["correct y"].values)
             for t in trials
         ]
+
+    def export_shifted_csvs(self, output_dir: str) -> list[str]:
+        exported = []
+        for trial in self.trials:
+            df = trial.df.copy()
+            df["t (s)"] = df["t (s)"] - trial.shift_s
+            eps = 1e-12
+            df.loc[abs(df["t (s)"]) < eps, "t (s)"] = 0.0
+            df = df[df["t (s)"] >= 0].reset_index(drop=True)
+            stem = os.path.splitext(os.path.basename(trial.path))[0]
+            out = os.path.join(output_dir, f"{stem}_timeshift.csv")
+            df.to_csv(out, index=False)
+            exported.append(out)
+        return exported

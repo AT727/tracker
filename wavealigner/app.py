@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 from functools import partial
 
 import numpy as np
@@ -23,6 +24,7 @@ from PyQt5.QtWidgets import (
     QGroupBox,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
     QMainWindow,
     QMenuBar,
     QMessageBox,
@@ -50,6 +52,9 @@ class WaveAlignerWindow(QMainWindow):
         self._axis_history: list[tuple] = []
         self._axis_history_index: int = -1
         self._shift_limit: float = 30.0
+        self._title: str = "Wave Aligner"
+        self._x_label: str = "Time (s)"
+        self._y_label: str = "Water Elevation (cm)"
         self._build_ui()
         self._build_menus()
 
@@ -133,9 +138,12 @@ class WaveAlignerWindow(QMainWindow):
         btn_layout = QHBoxLayout()
         reset_all_btn = QPushButton("Reset All")
         reset_all_btn.clicked.connect(self._on_reset_all)
+        export_shifts_btn = QPushButton("Export Shifts")
+        export_shifts_btn.clicked.connect(self._on_export_shifts)
         export_btn = QPushButton("Export Graph")
         export_btn.clicked.connect(self._on_export_graph)
         btn_layout.addWidget(reset_all_btn)
+        btn_layout.addWidget(export_shifts_btn)
         btn_layout.addWidget(export_btn)
         right_layout.addLayout(btn_layout)
 
@@ -155,6 +163,8 @@ class WaveAlignerWindow(QMainWindow):
         load_action.triggered.connect(self._on_load_csv)
         export_action = file_menu.addAction("Export Graph...")
         export_action.triggered.connect(self._on_export_graph)
+        export_shifts_action = file_menu.addAction("Export Shifts...")
+        export_shifts_action.triggered.connect(self._on_export_shifts)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("Quit")
         quit_action.triggered.connect(self.close)
@@ -206,6 +216,8 @@ class WaveAlignerWindow(QMainWindow):
         # Label + color indicator
         name_label = QLabel(f'<span style="color:{color}">\u25cf</span> {trial.label}')
         shift_label = QLabel("Shift: 0.000 s")
+        filename_label = QLabel(os.path.basename(trial.path))
+        filename_label.setStyleSheet("color:#585b70; font-size:10px; padding-left:28px;")
 
         # Spinbox for precise entry
         spin = QDoubleSpinBox()
@@ -239,10 +251,11 @@ class WaveAlignerWindow(QMainWindow):
         layout.addWidget(cb, 0, 0, 1, 1)
         layout.addWidget(name_label, 0, 1, 1, 1)
         layout.addWidget(shift_label, 0, 2, 1, 1)
-        layout.addWidget(spin, 1, 0, 1, 2)
-        layout.addWidget(slider, 1, 2, 1, 1)
-        layout.addWidget(reset_btn, 2, 0, 1, 1)
-        layout.addWidget(remove_btn, 2, 1, 1, 1)
+        layout.addWidget(filename_label, 1, 0, 1, 3)
+        layout.addWidget(spin, 2, 0, 1, 2)
+        layout.addWidget(slider, 2, 2, 1, 1)
+        layout.addWidget(reset_btn, 3, 0, 1, 1)
+        layout.addWidget(remove_btn, 3, 1, 1, 1)
 
         self._controls_layout.addWidget(frame)
         self._trial_widgets[trial] = {
@@ -315,14 +328,34 @@ class WaveAlignerWindow(QMainWindow):
             w["slider"].setRange(-limit_int, limit_int)
 
     def _on_export_graph(self) -> None:
+        default_name = "".join(
+            c for c in self._title if c.isalnum() or c in " _-"
+        ).strip() or "graph"
         path, _ = QFileDialog.getSaveFileName(
-            self, "Export Graph", "wave_aligner.png",
+            self, "Export Graph", f"{default_name}.png",
             "PNG (*.png);;PDF (*.pdf);;SVG (*.svg)"
         )
         if path:
             self._fig.savefig(path, dpi=150, bbox_inches="tight",
                               facecolor="white", edgecolor="none")
             self._status.showMessage(f"Exported -> {path}")
+
+    def _on_export_shifts(self) -> None:
+        if not self._collection.trials:
+            self._status.showMessage("No trials loaded.")
+            return
+        output_dir = QFileDialog.getExistingDirectory(
+            self, "Select Output Directory for Shifted CSVs"
+        )
+        if not output_dir:
+            return
+        paths = self._collection.export_shifted_csvs(output_dir)
+        names = "\n".join(os.path.basename(p) for p in paths)
+        QMessageBox.information(
+            self, "Export Complete",
+            f"Exported {len(paths)} shifted CSV(s) to:\n{output_dir}\n\n{names}"
+        )
+        self._status.showMessage(f"Exported {len(paths)} shifted CSV(s).")
 
     def _on_edit_axes(self) -> None:
         if self._fig is None:
@@ -334,6 +367,17 @@ class WaveAlignerWindow(QMainWindow):
         dlg = QDialog(self)
         dlg.setWindowTitle("Edit Axes Limits")
         form = QFormLayout(dlg)
+
+        title_edit = QLineEdit(self._title)
+        xlabel_edit = QLineEdit(self._x_label)
+        ylabel_edit = QLineEdit(self._y_label)
+        form.addRow("Title:", title_edit)
+        form.addRow("X label:", xlabel_edit)
+        form.addRow("Y label:", ylabel_edit)
+
+        sep = QFrame()
+        sep.setFrameShape(QFrame.HLine)
+        form.addRow(sep)
 
         xmin_spin = QDoubleSpinBox()
         xmin_spin.setRange(-1e6, 1e6)
@@ -363,6 +407,12 @@ class WaveAlignerWindow(QMainWindow):
         form.addRow(btns)
 
         if dlg.exec() == QDialog.Accepted:
+            self._title = title_edit.text()
+            self._x_label = xlabel_edit.text()
+            self._y_label = ylabel_edit.text()
+            ax.set_title(self._title)
+            ax.set_xlabel(self._x_label)
+            ax.set_ylabel(self._y_label)
             self._push_axis_state()
             ax.set_xlim(xmin_spin.value(), xmax_spin.value())
             ax.set_ylim(ymin_spin.value(), ymax_spin.value())
@@ -440,6 +490,9 @@ class WaveAlignerWindow(QMainWindow):
             nrmse_vals=nrmse_vals,
             mean_rmse=stats["mean_rmse"],
             mean_nrmse=stats["mean_nrmse"],
+            title=self._title,
+            x_label=self._x_label,
+            y_label=self._y_label,
         )
 
         # Replace canvas content

@@ -75,6 +75,7 @@ def build_figure(
     mean_nrmse: float | None,
     title: str = "Wave Aligner",
     x_label: str = "Time (s)",
+    y_label: str = "Water Elevation (cm)",
 ) -> Figure:
     fig = plt.figure(figsize=(14, 6), facecolor="white")
     gs = gridspec.GridSpec(
@@ -109,7 +110,7 @@ def build_figure(
     # Labels
     ax.set_title(title, fontsize=13, pad=10)
     ax.set_xlabel(x_label, fontsize=11)
-    ax.set_ylabel("Water Elevation (cm)", fontsize=11)
+    ax.set_ylabel(y_label, fontsize=11)
     ax.tick_params(labelsize=10)
 
     # Legend
