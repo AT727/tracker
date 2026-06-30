@@ -47,6 +47,7 @@ from tracker.mutations.persistence import MutationStore
 from tracker.panels.data_table import DataTablePanel
 from tracker.panels.plot_panel import PlotPanel
 from tracker.panels.series_toolbar import SeriesToolbar
+from tracker.persistence.progress import ProgressStore
 from tracker.tracking.collector import TrackingCollector
 from tracker.tracking.mark import Mark
 from tracker.video.decoder_worker import VideoDecoderWorker
@@ -220,6 +221,15 @@ class MainWindow(QMainWindow):
         export_action = QAction("Export CSV...", self)
         export_action.triggered.connect(self._export_csv)
         file_menu.addAction(export_action)
+        file_menu.addSeparator()
+        self._save_progress_action = QAction("Save Progress...", self)
+        self._save_progress_action.triggered.connect(self._save_progress)
+        self._save_progress_action.setEnabled(False)
+        file_menu.addAction(self._save_progress_action)
+        self._load_progress_action = QAction("Load Progress...", self)
+        self._load_progress_action.triggered.connect(self._load_progress)
+        file_menu.addAction(self._load_progress_action)
+        file_menu.addSeparator()
         quit_action = QAction("Quit", self)
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
@@ -325,6 +335,7 @@ class MainWindow(QMainWindow):
         self.collector.clear_marks()
         self._marks_by_frame.clear()
         self._refresh_panels()
+        self._save_progress_action.setEnabled(True)
         self._update_overlays()
 
     def _on_video_opened(self, fps: float, frame_count: int, width: int, height: int) -> None:
@@ -368,14 +379,12 @@ class MainWindow(QMainWindow):
                 self._calibration.update_draft(px, py)
                 self._update_overlays()
         else:
-            self._canvas.tracker_scene.show_click_feedback(px, py)
+            self._canvas.flash_cursor_green()
 
     def _on_pixel_moved(self, px: float, py: float) -> None:
         if self._calibration.mode != CalibrationMode.NONE:
             if self._calibration.update_draft(px, py):
                 self._update_overlays()
-        else:
-            self._canvas.tracker_scene.show_click_feedback(px, py)
 
     def _on_pixel_released(self, px: float, py: float) -> None:
         if self._calibration.mode != CalibrationMode.NONE:
@@ -389,6 +398,7 @@ class MainWindow(QMainWindow):
                     )
             return
 
+        self._canvas.restore_cursor()
         self._record_click_at(px, py)
 
     def _record_click_at(self, px: float, py: float) -> None:
@@ -412,7 +422,9 @@ class MainWindow(QMainWindow):
         pixel = self._current_canvas_pixel()
         if pixel is None:
             return
+        self._canvas.flash_cursor_green()
         self._record_click_at(pixel[0], pixel[1])
+        self._canvas.restore_cursor()
 
     def _current_canvas_pixel(self) -> tuple[float, float] | None:
         view_pos = self._canvas.viewport().mapFromGlobal(QCursor.pos())
@@ -493,7 +505,6 @@ class MainWindow(QMainWindow):
             self._decoder.request_frame(index)
         if prefetch:
             self._decoder.prefetch(index + 1, 5)
-        self._canvas.tracker_scene.clear_click_feedback()
         self._refresh_marks_on_canvas()
         self._update_status()
 
@@ -545,13 +556,17 @@ class MainWindow(QMainWindow):
     def _update_overlays(self) -> None:
         scene = self._canvas.tracker_scene
         cal = self._calibration.data
+        # Local copies for snapshot isolation from in-place mutation
+        stick_a_px = cal.stick_a_px
+        stick_b_px = cal.stick_b_px
+        origin_px = cal.origin_px
         mode = self._calibration.mode
         draft = self._calibration.draft
         scene.set_stick_visible(self._show_stick.isChecked())
         scene.set_grid_visible(self._show_grid.isChecked())
 
-        stick_a = cal.stick_a_px
-        stick_b = cal.stick_b_px
+        stick_a = stick_a_px
+        stick_b = stick_b_px
         if mode == CalibrationMode.STICK_A and draft:
             stick_a = draft
         elif mode == CalibrationMode.STICK_B and draft:
@@ -569,8 +584,8 @@ class MainWindow(QMainWindow):
         grid_oy: float | None = None
         if mode == CalibrationMode.SET_ORIGIN and draft:
             grid_ox, grid_oy = draft
-        elif cal.origin_px:
-            grid_ox, grid_oy = cal.origin_px
+        elif origin_px:
+            grid_ox, grid_oy = origin_px
         elif mode == CalibrationMode.SET_ORIGIN and cal.stick_a_px and cal.stick_b_px:
             ax, ay = cal.stick_a_px
             bx, by = cal.stick_b_px
@@ -711,6 +726,69 @@ class MainWindow(QMainWindow):
             QMessageBox.warning(self, "Export", str(exc))
             return
         QMessageBox.information(self, "Export", f"Saved to {path}")
+
+    def _save_progress(self) -> None:
+        if not self._video_path:
+            return
+        default_name = self._video_path.with_suffix(".tracker.json")
+        path, _ = QFileDialog.getSaveFileName(
+            self,
+            "Save Progress",
+            str(default_name),
+            "Tracker Progress Files (*.tracker.json)",
+        )
+        if not path:
+            return
+        try:
+            ProgressStore.save(path, self.collector)
+            self._status.showMessage(f"Progress saved to {path}", 5000)
+        except OSError as exc:
+            QMessageBox.critical(self, "Save Error", f"Failed to save progress:\n{exc}")
+
+    def _load_progress(self) -> None:
+        if not self._video_path:
+            return
+        if self.collector.marks:
+            reply = QMessageBox.question(
+                self,
+                "Load Progress",
+                "This will replace all current marks. Continue?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+            if reply != QMessageBox.Yes:
+                return
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Load Progress",
+            str(self._video_path.parent),
+            "Tracker Progress Files (*.tracker.json)",
+        )
+        if not path:
+            return
+        data = ProgressStore.load(path)
+        if data is None:
+            QMessageBox.warning(
+                self,
+                "Load Error",
+                "Could not load progress file. The file may be missing or corrupt.",
+            )
+            return
+        self.collector.load_from(
+            series_list=data["series"],
+            marks_list=data["marks"],
+            active_series_id=data["active_series_id"],
+        )
+        self._rebuild_marks_by_frame()
+        self._refresh_panels()
+        self._update_overlays()
+        self._refresh_marks_on_canvas()
+        self._status.showMessage(f"Progress loaded from {path}", 5000)
+
+    def _rebuild_marks_by_frame(self) -> None:
+        self._marks_by_frame.clear()
+        for mark in self.collector.marks:
+            self._marks_by_frame.setdefault(mark.frame, []).append(mark)
 
     def _save_preset(self) -> None:
         if not self._calibration.data.is_calibrated:

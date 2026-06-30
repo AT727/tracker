@@ -35,6 +35,10 @@ def load_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep=None, engine="python")
     df.columns = df.columns.str.strip()
 
+    # Normalize "t" → "t (s)" if found without units
+    if "t" in df.columns and "t (s)" not in df.columns:
+        df = df.rename(columns={"t": "t (s)"})
+
     # accept both "correct y" and "correc y" (common typo in source CSVs)
     rename = {}
     for col in df.columns:

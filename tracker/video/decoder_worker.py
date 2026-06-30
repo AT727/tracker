@@ -1,4 +1,4 @@
-"""QThread video decoder with LRU frame cache."""
+"""QThread video decoder with LRU frame cache. Assumes constant frame rate."""
 
 from __future__ import annotations
 
@@ -195,6 +195,9 @@ class VideoDecoderWorker(QThread):
             return None
 
         # Use index/fps to avoid an extra CAP_PROP_POS_MSEC get() per frame.
+        # Limitation: assumes constant frame rate. For variable-frame-rate
+        # video (common in phone / screen recordings), use CAP_PROP_POS_MSEC
+        # instead of index / fps.
         timestamp_s = index / self._fps if self._fps > 0 else 0.0
 
         self._cap_pos_index = index

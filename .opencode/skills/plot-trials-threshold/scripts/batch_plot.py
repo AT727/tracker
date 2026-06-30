@@ -32,7 +32,8 @@ def find_csvs(folder: Path) -> list[Path]:
 
 def process_folder(folder: Path, script: Path, output_dir: Path | None,
                    no_align: bool = False,
-                   align_mode: str | None = None) -> tuple[bool, str]:
+                   align_mode: str | None = None,
+                   threshold_frac: float = 0.4) -> tuple[bool, str]:
     """
     Run plot_trials.py on all CSVs in folder.
     Returns (success, message).
@@ -40,16 +41,19 @@ def process_folder(folder: Path, script: Path, output_dir: Path | None,
     csvs = find_csvs(folder)
 
     if len(csvs) < 2:
-        return False, f"Skipped — only {len(csvs)} CSV file(s) found (need ≥ 2)"
+        return False, f"Skipped — only {len(csvs)} CSV file(s) found (need >= 2)"
 
     # ── output name reflects alignment mode ──────────────────────────────────
     base_name = folder.name
     if no_align:
         mode_tag = "noalign"
-    elif align_mode == "mean":
-        mode_tag = "align_mean"
+    elif align_mode == "threshold":
+        thr_pct = int(threshold_frac * 100)
+        mode_tag = f"align_thr{thr_pct:02d}"
+    elif align_mode == "peak":
+        mode_tag = "align_peak"
     else:
-        mode_tag = "align_ref"
+        mode_tag = "noalign"
 
     output_name = f"{base_name}_trials_{mode_tag}.png"
     if output_dir:
@@ -67,6 +71,8 @@ def process_folder(folder: Path, script: Path, output_dir: Path | None,
         cmd.append("--no-align")
     elif align_mode:
         cmd.extend(["--align-mode", align_mode])
+        if align_mode == "threshold":
+            cmd.extend(["--threshold", str(threshold_frac)])
 
     try:
         result = subprocess.run(
@@ -108,8 +114,12 @@ def main():
         help="Skip cross-correlation alignment (pass through to plot_trials.py)."
     );
     parser.add_argument(
-        "--align-mode", choices=["ref", "mean"], default=None,
-        help="Alignment algorithm (pass through to plot_trials.py)."
+        "--align-mode", choices=["threshold", "peak", "none"], default="threshold",
+        help="Alignment method (pass through to plot_trials.py, default: threshold)."
+    );
+    parser.add_argument(
+        "--threshold", type=float, default=0.4,
+        help="Fraction of rise for threshold crossing (default: 0.4)."
     );
     args = parser.parse_args()
 
@@ -132,7 +142,7 @@ def main():
         if not parent.is_dir():
             print(f"ERROR: --parent '{parent}' is not a directory.", file=sys.stderr)
             sys.exit(1)
-        folders = sorted(p for p in parent.iterdir() if p.is_dir())
+        folders = sorted(p for p in parent.iterdir() if p.is_dir() and p.name != "graphs")
         if not folders:
             print(f"No subfolders found in '{parent}'.", file=sys.stderr)
             sys.exit(1)
@@ -161,7 +171,8 @@ def main():
         print(f"  [{folder.name}] ", end="", flush=True)
         ok, msg = process_folder(folder, script, args.output_dir,
                                  no_align=args.no_align,
-                                 align_mode=args.align_mode)
+                                 align_mode=args.align_mode,
+                                 threshold_frac=args.threshold)
         if ok:
             print(f"[OK]  {msg}")
             successes.append((folder.name, msg))

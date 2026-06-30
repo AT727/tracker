@@ -40,7 +40,7 @@ def process_folder(folder: Path, script: Path, output_dir: Path | None,
     csvs = find_csvs(folder)
 
     if len(csvs) < 2:
-        return False, f"Skipped — only {len(csvs)} CSV file(s) found (need ≥ 2)"
+        return False, f"Skipped — only {len(csvs)} CSV file(s) found (need >= 2)"
 
     # ── output name reflects alignment mode ──────────────────────────────────
     base_name = folder.name
@@ -132,7 +132,7 @@ def main():
         if not parent.is_dir():
             print(f"ERROR: --parent '{parent}' is not a directory.", file=sys.stderr)
             sys.exit(1)
-        folders = sorted(p for p in parent.iterdir() if p.is_dir())
+        folders = sorted(p for p in parent.iterdir() if p.is_dir() and p.name != "graphs")
         if not folders:
             print(f"No subfolders found in '{parent}'.", file=sys.stderr)
             sys.exit(1)

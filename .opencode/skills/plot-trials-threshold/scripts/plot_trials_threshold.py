@@ -50,16 +50,26 @@ BASELINE_SAMPLES = 50
 def load_csv(path: str) -> pd.DataFrame:
     df = pd.read_csv(path, sep=None, engine="python")
     df.columns = df.columns.str.strip()
+ 
+    # Normalize "t" → "t (s)" if found without units
+    if "t" in df.columns and "t (s)" not in df.columns:
+        df = df.rename(columns={"t": "t (s)"})
 
-    # accept both "correct y" and "correc y" (common typo in source CSVs)
+    # Prefer "correct y" / "correc y" if present, fall back to "y (cm)"
     rename = {col: "correct y" for col in df.columns if col.lower().startswith("correc")}
     if rename:
         df = df.rename(columns=rename)
-
+    elif "y (cm)" in df.columns:
+        df = df.rename(columns={"y (cm)": "correct y"})
+ 
     required = {"t (s)", "correct y"}
     missing = required - set(df.columns)
     if missing:
-        raise ValueError(f"{path}: missing columns {missing}. Found: {list(df.columns)}")
+        raise ValueError(
+            f"{path}: could not find required columns.\n"
+            f"  Expected: 't' and one of 'correct y', 'correc y', 'y (cm)'\n"
+            f"  Found:    {list(df.columns)}"
+        )
     return df[["t (s)", "correct y"]].dropna().reset_index(drop=True)
 
 
@@ -357,7 +367,7 @@ def plot_trials(
     plt.savefig(output_path, dpi=150, bbox_inches="tight",
                 facecolor="white", edgecolor="none")
     plt.close()
-    print(f"Saved → {output_path}")
+    print(f"Saved -> {output_path}")
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -25,6 +25,7 @@ class TrackerScene(QGraphicsScene):
         self._grid = OriginGridOverlay()
         self._frame_label = FrameLabelItem()
         self._mark_items: list[QGraphicsItem] = []
+        self._mark_styles: list[str] = []
         self._click_feedback: MarkDotItem | None = None
         self.addItem(self._frame_item)
         self.addItem(self._stick)
@@ -60,17 +61,25 @@ class TrackerScene(QGraphicsScene):
         self._frame_label.set_frame_text(index, total, timestamp_s)
 
     def set_marks(self, marks: list[tuple[float, float, str]]) -> None:
+        """Render mark items at pixel positions. Recreates items on style mismatch."""
         for i, (px, py, style) in enumerate(marks):
             if i < len(self._mark_items):
-                self._mark_items[i].setPos(px, py)
-            else:
-                if style == "dot":
-                    item = MarkDotItem(px, py)
+                if self._mark_styles[i] != style:
+                    old = self._mark_items[i]
+                    self.removeItem(old)
+                    item = MarkDotItem(px, py) if style == "dot" else MarkSquareItem(px, py)
+                    self.addItem(item)
+                    self._mark_items[i] = item
+                    self._mark_styles[i] = style
                 else:
-                    item = MarkSquareItem(px, py)
+                    self._mark_items[i].setPos(px, py)
+            else:
+                item = MarkDotItem(px, py) if style == "dot" else MarkSquareItem(px, py)
                 self.addItem(item)
                 self._mark_items.append(item)
+                self._mark_styles.append(style)
         while len(self._mark_items) > len(marks):
+            self._mark_styles.pop()
             item = self._mark_items.pop()
             self.removeItem(item)
 
