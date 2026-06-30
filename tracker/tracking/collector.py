@@ -95,5 +95,38 @@ class TrackingCollector:
         self._marks.clear()
         self._marks_by_key.clear()
 
+    def load_from(
+        self,
+        series_list: list[dict],
+        marks_list: list[dict],
+        active_series_id: str | None,
+    ) -> None:
+        self._series.clear()
+        self._marks.clear()
+        self._marks_by_key.clear()
+        self._active_series_id = None
+
+        for s in series_list:
+            series = PointSeries(id=s["id"], label=s["label"], color=s["color"])
+            self._series[series.id] = series
+
+        for m in marks_list:
+            mark = Mark(
+                frame=m["frame"],
+                timestamp_s=m["timestamp_s"],
+                px=m["px"],
+                py=m["py"],
+                series_id=m["series_id"],
+            )
+            self._marks.append(mark)
+            self._marks_by_key[(mark.series_id, mark.frame)] = len(self._marks) - 1
+
+        if active_series_id and active_series_id in self._series:
+            self._active_series_id = active_series_id
+        elif self._series:
+            self._active_series_id = next(iter(self._series))
+        else:
+            self._ensure_default_series()
+
     def iter_marks(self) -> Iterable[Mark]:
         return iter(self._marks)

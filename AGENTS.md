@@ -4,7 +4,7 @@
 - Use opensrc path <pkg> to read dependency source when you need implementation details
 
 ## Context7
-- Always use context7 when coding with a library such as OpenCV or matplotlib for most accurate code
+- Always use context7 when coding with a library such as PyQt5 or matplotlib to get most accurate code
 
 ## Superpowers
 - Always use superpowers for all tasks
