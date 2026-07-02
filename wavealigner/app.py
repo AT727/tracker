@@ -147,6 +147,12 @@ class WaveAlignerWindow(QMainWindow):
         btn_layout.addWidget(export_btn)
         right_layout.addLayout(btn_layout)
 
+        remove_all_layout = QHBoxLayout()
+        remove_all_btn = QPushButton("Remove All")
+        remove_all_btn.clicked.connect(self._on_remove_all)
+        remove_all_layout.addWidget(remove_all_btn)
+        right_layout.addLayout(remove_all_layout)
+
         splitter.addWidget(left)
         splitter.addWidget(right)
         splitter.setStretchFactor(0, 3)
@@ -305,6 +311,15 @@ class WaveAlignerWindow(QMainWindow):
             widgets["checkbox"].setChecked(True)
             trial.shift_s = 0.0
             trial.visible = True
+        self._update_plot()
+
+    def _on_remove_all(self) -> None:
+        for trial, widget_dict in list(self._trial_widgets.items()):
+            self._controls_layout.removeWidget(widget_dict["frame"])
+            widget_dict["frame"].deleteLater()
+        self._trial_widgets.clear()
+        self._collection.remove_all()
+        self._rename_trials()
         self._update_plot()
 
     def _on_remove_trial(self, trial: Trial) -> None:

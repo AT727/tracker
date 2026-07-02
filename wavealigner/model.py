@@ -67,6 +67,9 @@ class TrialCollection:
     def remove_trial(self, trial: Trial) -> None:
         self.trials.remove(trial)
 
+    def remove_all(self) -> None:
+        self.trials.clear()
+
     def reset_all(self) -> None:
         for t in self.trials:
             t.shift_s = 0.0
