@@ -362,7 +362,7 @@ class MainWindow(QMainWindow):
         self._canvas.tracker_scene.set_frame_pixmap(pixmap)
         self._current_timestamp = timestamp_s
         self._canvas.tracker_scene.set_frame_label(index, self._frame_count, timestamp_s)
-        self._canvas.viewport().repaint()
+        self._canvas.viewport().update()
         self._update_overlays()
         self._update_status()
 
@@ -468,7 +468,7 @@ class MainWindow(QMainWindow):
 
     def _advance_frame(self) -> None:
         if self._current_frame < self._frame_count - 1:
-            self._go_to_frame(self._current_frame + 1, prefetch=True)
+            self._go_to_frame(self._current_frame + 1, coalesce=True, prefetch=True)
 
     def _go_prev(self) -> None:
         if self._current_frame > 0:
@@ -602,7 +602,7 @@ class MainWindow(QMainWindow):
         self._canvas.tracker_scene.set_marks(marks_data)
 
     def _sync_marks_for_frame(self, frame: int) -> None:
-        marks = [mark for mark in self.collector.marks if mark.frame == frame]
+        marks = self.collector.marks_for_frame(frame)
         if marks:
             self._marks_by_frame[frame] = marks
         else:

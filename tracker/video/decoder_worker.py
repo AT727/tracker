@@ -29,6 +29,7 @@ class VideoDecoderWorker(QThread):
         # This lets us skip CAP_PROP_POS_FRAMES seeks for sequential forward reads.
         self._cap_pos_index: int | None = None
         self._cache: FrameCache[tuple[QImage, float]] = FrameCache(max_size=60)
+        self._cache_max_size = 60
         self._scrub_frame: int | None = None
         self._pending: list[int] = []
         self._prefetch_pending: list[int] = []
@@ -41,6 +42,15 @@ class VideoDecoderWorker(QThread):
     @property
     def frame_count(self) -> int:
         return self._frame_count
+
+    @staticmethod
+    def _infer_cache_size(width: int, height: int) -> int:
+        if width <= 0 or height <= 0:
+            return 60
+        pixels = width * height
+        target_pixels = 100_000_000
+        size = target_pixels // pixels if pixels > 0 else 60
+        return max(30, min(300, size))
 
     def open(self, path: str) -> None:
         with QMutexLocker(self._mutex):
@@ -173,7 +183,8 @@ class VideoDecoderWorker(QThread):
         self._frame_count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
         self._width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
         self._height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
-        self._cache.clear()
+        self._cache_max_size = self._infer_cache_size(self._width, self._height)
+        self._cache = FrameCache(max_size=self._cache_max_size)
         self._cap_pos_index = None
         self.opened.emit(self._fps, self._frame_count, self._width, self._height)
 
