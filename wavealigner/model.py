@@ -6,6 +6,8 @@ from dataclasses import dataclass, field
 import numpy as np
 import pandas as pd
 
+from wavealigner.stats import compute_trial_stats
+
 
 @dataclass
 class Trial:
@@ -110,6 +112,28 @@ class TrialCollection:
             np.interp(t_common, t.df["t (s)"].values - t.shift_s, t.df["correct y"].values)
             for t in trials
         ]
+
+    def summary_data(self, visible_only: bool = True) -> dict:
+        trials = self.visible_trials if visible_only else self.trials
+        if len(trials) < 2:
+            return {}
+        _, _, t_common = self.overlap_region(visible_only)
+        interp_signals = [
+            np.interp(t_common, t.df["t (s)"].values - t.shift_s, t.df["correct y"].values)
+            for t in trials
+        ]
+        stats = compute_trial_stats(interp_signals)
+        return {
+            "t_common": t_common,
+            "mean_y": stats["mean_y"],
+            "std_y": stats["std_y"],
+            "rmse_vals": stats["rmse_vals"],
+            "nrmse_vals": stats["nrmse_vals"],
+            "mean_rmse": stats["mean_rmse"],
+            "mean_nrmse": stats["mean_nrmse"],
+            "trial_labels": [t.label for t in trials],
+            "shifts": [t.shift_s for t in trials],
+        }
 
     def export_shifted_csvs(self, output_dir: str) -> list[str]:
         exported = []

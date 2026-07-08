@@ -140,10 +140,13 @@ class WaveAlignerWindow(QMainWindow):
         reset_all_btn.clicked.connect(self._on_reset_all)
         export_shifts_btn = QPushButton("Export Shifts")
         export_shifts_btn.clicked.connect(self._on_export_shifts)
+        export_stats_btn = QPushButton("Export Stats")
+        export_stats_btn.clicked.connect(self._on_export_stats)
         export_btn = QPushButton("Export Graph")
         export_btn.clicked.connect(self._on_export_graph)
         btn_layout.addWidget(reset_all_btn)
         btn_layout.addWidget(export_shifts_btn)
+        btn_layout.addWidget(export_stats_btn)
         btn_layout.addWidget(export_btn)
         right_layout.addLayout(btn_layout)
 
@@ -171,6 +174,8 @@ class WaveAlignerWindow(QMainWindow):
         export_action.triggered.connect(self._on_export_graph)
         export_shifts_action = file_menu.addAction("Export Shifts...")
         export_shifts_action.triggered.connect(self._on_export_shifts)
+        export_stats_action = file_menu.addAction("Export Stats...")
+        export_stats_action.triggered.connect(self._on_export_stats)
         file_menu.addSeparator()
         quit_action = file_menu.addAction("Quit")
         quit_action.triggered.connect(self.close)
@@ -371,6 +376,58 @@ class WaveAlignerWindow(QMainWindow):
             f"Exported {len(paths)} shifted CSV(s) to:\n{output_dir}\n\n{names}"
         )
         self._status.showMessage(f"Exported {len(paths)} shifted CSV(s).")
+
+    def _on_export_stats(self) -> None:
+        collection = self._collection
+        if len(collection.visible_trials) < 2:
+            QMessageBox.warning(self, "Export Stats",
+                                "Need at least 2 visible trials to compute statistics.")
+            return
+        sd = collection.summary_data(visible_only=True)
+        if not sd:
+            return
+
+        default_name = "".join(
+            c for c in self._title if c.isalnum() or c in " _-"
+        ).strip() or "stats"
+        path, _ = QFileDialog.getSaveFileName(
+            self, "Export Stats Summary", f"{default_name}_mean.csv",
+            "CSV Files (*.csv)"
+        )
+        if not path:
+            return
+
+        import pandas as pd
+
+        n = len(sd["t_common"])
+        time_df = pd.DataFrame({
+            "t (s)": sd["t_common"],
+            "mean y": sd["mean_y"],
+            "std dev": sd["std_y"],
+            "mean - 1\u03c3": sd["mean_y"] - sd["std_y"],
+            "mean + 1\u03c3": sd["mean_y"] + sd["std_y"],
+        })
+
+        m = len(sd["trial_labels"])
+        pad = [""] * n
+        sum_trial, sum_rmse, sum_nrmse, sum_shift = [pad[:] for _ in range(4)]
+        for i, lbl in enumerate(sd["trial_labels"]):
+            sum_trial[i] = lbl
+            sum_rmse[i] = f"{sd['rmse_vals'][i]:.4f}"
+            sum_nrmse[i] = f"{sd['nrmse_vals'][i]:.2f}"
+            sum_shift[i] = f"{sd['shifts'][i]:+.3f}"
+        sum_trial[m] = "Mean \u03c3"
+        sum_rmse[m] = f"{sd['mean_rmse']:.4f}"
+        sum_nrmse[m] = f"{sd['mean_nrmse']:.2f}"
+
+        out = pd.concat([
+            time_df,
+            pd.DataFrame({"": pad}),
+            pd.DataFrame({"Trial": sum_trial, "RMSE (cm)": sum_rmse,
+                          "NRMSE (%)": sum_nrmse, "Shift (s)": sum_shift}),
+        ], axis=1)
+        out.to_csv(path, index=False, encoding="utf-8-sig")
+        self._status.showMessage(f"Stats exported -> {path}")
 
     def _on_edit_axes(self) -> None:
         if self._fig is None:
