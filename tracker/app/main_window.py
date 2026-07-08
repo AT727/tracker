@@ -74,6 +74,9 @@ class MainWindow(QMainWindow):
         self._plot_refresh_timer = QElapsedTimer()
         self._plot_refresh_timer.start()
         self._min_plot_refresh_interval_ms = 200
+        self._table_refresh_timer = QTimer(self)
+        self._table_refresh_timer.setSingleShot(True)
+        self._table_refresh_timer.timeout.connect(self._refresh_table)
         self._autoclicker = AutoClickerController(self)
         self._autoclicker_enabled_action: QAction | None = None
 
@@ -413,9 +416,8 @@ class MainWindow(QMainWindow):
         )
         self._sync_marks_for_frame(mark.frame)
         self._advance_frame()
-        if self._show_table.isChecked():
-            # Defer table work so rapid clicks stay responsive.
-            QTimer.singleShot(0, self._refresh_table)
+        if self._show_table.isChecked() and not self._table_refresh_timer.isActive():
+            self._table_refresh_timer.start(200)
         self._maybe_refresh_plot()
 
     def _on_autoclick_requested(self) -> None:

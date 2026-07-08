@@ -14,6 +14,7 @@ class TrackingCollector:
         self._marks: list[Mark] = []
         self._marks_by_key: dict[tuple[str, int], int] = {}
         self._marks_by_frame: dict[int, list[Mark]] = {}
+        self._marks_by_series: dict[str, list[Mark]] = {}
         self._active_series_id: Optional[str] = None
         self._ensure_default_series()
 
@@ -64,6 +65,7 @@ class TrackingCollector:
         mark = Mark(frame=frame, timestamp_s=timestamp_s, px=px, py=py, series_id=sid)
         self._marks.append(mark)
         self._marks_by_frame.setdefault(mark.frame, []).append(mark)
+        self._marks_by_series.setdefault(sid, []).append(mark)
         return mark
 
     def upsert_mark(
@@ -90,17 +92,28 @@ class TrackingCollector:
                     old_frame_marks.remove(old)
                 except ValueError:
                     pass
+            old_series_marks = self._marks_by_series.get(old.series_id)
+            if old_series_marks is not None:
+                try:
+                    old_series_marks.remove(old)
+                except ValueError:
+                    pass
             self._marks[existing_idx] = mark
             self._marks_by_frame.setdefault(mark.frame, []).append(mark)
+            self._marks_by_series.setdefault(sid, []).append(mark)
             return mark, True
 
         self._marks.append(mark)
         self._marks_by_key[key] = len(self._marks) - 1
         self._marks_by_frame.setdefault(mark.frame, []).append(mark)
+        self._marks_by_series.setdefault(sid, []).append(mark)
         return mark, False
 
     def marks_for_series(self, series_id: str) -> list[Mark]:
-        return [m for m in self._marks if m.series_id == series_id]
+        return list(self._marks_by_series.get(series_id, []))
+
+    def marks_for_series_sorted(self, series_id: str) -> list[Mark]:
+        return sorted(self._marks_by_series.get(series_id, []), key=lambda m: m.frame)
 
     def marks_for_frame(self, frame: int) -> list[Mark]:
         return list(self._marks_by_frame.get(frame, []))
@@ -109,6 +122,7 @@ class TrackingCollector:
         self._marks.clear()
         self._marks_by_key.clear()
         self._marks_by_frame.clear()
+        self._marks_by_series.clear()
 
     def load_from(
         self,
@@ -120,6 +134,7 @@ class TrackingCollector:
         self._marks.clear()
         self._marks_by_key.clear()
         self._marks_by_frame.clear()
+        self._marks_by_series.clear()
         self._active_series_id = None
 
         for s in series_list:
@@ -137,6 +152,7 @@ class TrackingCollector:
             self._marks.append(mark)
             self._marks_by_key[(mark.series_id, mark.frame)] = len(self._marks) - 1
             self._marks_by_frame.setdefault(mark.frame, []).append(mark)
+            self._marks_by_series.setdefault(mark.series_id, []).append(mark)
 
         if active_series_id and active_series_id in self._series:
             self._active_series_id = active_series_id
