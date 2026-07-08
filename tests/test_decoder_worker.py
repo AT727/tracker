@@ -139,3 +139,11 @@ def test_decode_skips_seek_for_sequential_reads(qapp, monkeypatch):
 
     # With sequential optimization we should seek only for the first frame.
     assert fake.set_calls == 1
+
+
+def test_infer_cache_size_respects_bounds():
+    assert VideoDecoderWorker._infer_cache_size(0, 0) == 60
+    assert VideoDecoderWorker._infer_cache_size(768, 432) == 300   # ~332K px
+    assert VideoDecoderWorker._infer_cache_size(1920, 1080) == 48   # ~2.07M px
+    assert VideoDecoderWorker._infer_cache_size(3840, 2160) == 30   # ~8.29M px
+    assert VideoDecoderWorker._infer_cache_size(1, 1) == 300        # clamp

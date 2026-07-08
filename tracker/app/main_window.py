@@ -74,6 +74,9 @@ class MainWindow(QMainWindow):
         self._plot_refresh_timer = QElapsedTimer()
         self._plot_refresh_timer.start()
         self._min_plot_refresh_interval_ms = 200
+        self._table_refresh_timer = QTimer(self)
+        self._table_refresh_timer.setSingleShot(True)
+        self._table_refresh_timer.timeout.connect(self._refresh_table)
         self._autoclicker = AutoClickerController(self)
         self._autoclicker_enabled_action: QAction | None = None
 
@@ -362,7 +365,7 @@ class MainWindow(QMainWindow):
         self._canvas.tracker_scene.set_frame_pixmap(pixmap)
         self._current_timestamp = timestamp_s
         self._canvas.tracker_scene.set_frame_label(index, self._frame_count, timestamp_s)
-        self._canvas.viewport().repaint()
+        self._canvas.viewport().update()
         self._update_overlays()
         self._update_status()
 
@@ -413,9 +416,8 @@ class MainWindow(QMainWindow):
         )
         self._sync_marks_for_frame(mark.frame)
         self._advance_frame()
-        if self._show_table.isChecked():
-            # Defer table work so rapid clicks stay responsive.
-            QTimer.singleShot(0, self._refresh_table)
+        if self._show_table.isChecked() and not self._table_refresh_timer.isActive():
+            self._table_refresh_timer.start(200)
         self._maybe_refresh_plot()
 
     def _on_autoclick_requested(self) -> None:
@@ -468,7 +470,7 @@ class MainWindow(QMainWindow):
 
     def _advance_frame(self) -> None:
         if self._current_frame < self._frame_count - 1:
-            self._go_to_frame(self._current_frame + 1, prefetch=True)
+            self._go_to_frame(self._current_frame + 1, coalesce=True, prefetch=True)
 
     def _go_prev(self) -> None:
         if self._current_frame > 0:
@@ -602,7 +604,7 @@ class MainWindow(QMainWindow):
         self._canvas.tracker_scene.set_marks(marks_data)
 
     def _sync_marks_for_frame(self, frame: int) -> None:
-        marks = [mark for mark in self.collector.marks if mark.frame == frame]
+        marks = self.collector.marks_for_frame(frame)
         if marks:
             self._marks_by_frame[frame] = marks
         else:

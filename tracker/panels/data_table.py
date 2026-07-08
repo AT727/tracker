@@ -39,11 +39,10 @@ class DataTablePanel(QTableWidget):
     ) -> None:
         mutations = mutations or []
         marks = (
-            collector.marks_for_series(series_id)
+            collector.marks_for_series_sorted(series_id)
             if series_id
-            else collector.marks
+            else sorted(collector.marks, key=lambda m: m.frame)
         )
-        marks = sorted(marks, key=lambda m: m.frame)
         gap_after_frames = gap_after_frames or set()
         scrollbar = self.verticalScrollBar()
         at_bottom = scrollbar.value() >= scrollbar.maximum() - self._SCROLL_THRESHOLD

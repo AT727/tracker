@@ -97,3 +97,30 @@ def test_clear_marks_resets_dict():
     mark, replaced = collector.upsert_mark(0, 0.5, 3.0, 4.0)
     assert not replaced
     assert len(collector.marks) == 1
+
+
+def test_marks_for_frame_returns_frame_marks():
+    collector = TrackingCollector()
+    collector.upsert_mark(0, 0.0, 1.0, 2.0)
+    collector.upsert_mark(0, 0.1, 3.0, 4.0)  # replace
+    collector.upsert_mark(1, 0.2, 5.0, 6.0)
+    assert len(collector.marks_for_frame(0)) == 1
+    assert len(collector.marks_for_frame(1)) == 1
+    assert len(collector.marks_for_frame(99)) == 0
+
+
+def test_marks_for_frame_upsert_frame_change():
+    """Upserting a mark at a new frame moves the old mark's frame entry."""
+    collector = TrackingCollector()
+    collector.upsert_mark(5, 0.0, 1.0, 2.0)
+    # Replace at the same (series, frame) key — frame doesn't change
+    collector.upsert_mark(5, 0.1, 3.0, 4.0)
+    assert len(collector.marks_for_frame(5)) == 1
+    assert len(collector.marks_for_frame(0)) == 0
+
+
+def test_marks_for_frame_after_clear():
+    collector = TrackingCollector()
+    collector.upsert_mark(0, 0.0, 1.0, 2.0)
+    collector.clear_marks()
+    assert len(collector.marks_for_frame(0)) == 0
