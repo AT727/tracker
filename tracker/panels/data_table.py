@@ -28,6 +28,11 @@ class DataTablePanel(QTableWidget):
         self.setSelectionBehavior(QTableWidget.SelectRows)
         self.setContextMenuPolicy(Qt.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
+        self._last_series_id: str | None = None
+        self._last_mutations: list[ColumnMutation] = []
+        self._last_mark_count: int = 0
+        self._last_mark_frame: int = -1
+        self._last_row_count: int = 0
 
     def refresh(
         self,
@@ -48,6 +53,48 @@ class DataTablePanel(QTableWidget):
         at_bottom = scrollbar.value() >= scrollbar.maximum() - self._SCROLL_THRESHOLD
         row_count = len(marks) + sum(1 for mark in marks if mark.frame in gap_after_frames)
         col_count = len(self.HEADERS) + len(mutations)
+
+        marks_appended = (
+            self._last_mark_count > 0
+            and len(marks) > self._last_mark_count
+            and marks[-1].frame > self._last_mark_frame
+        )
+        can_increment = (
+            series_id == self._last_series_id
+            and mutations == self._last_mutations
+            and marks_appended
+        )
+
+        if can_increment:
+            self.setRowCount(row_count)
+            new_marks = marks[self._last_mark_count:]
+            row = self._last_row_count
+            for mark in new_marks:
+                world = pipeline.pixel_to_world(mark.px, mark.py)
+                values = [
+                    str(mark.frame + 1),
+                    f"{mark.timestamp_s:.4f}",
+                    f"{world.x:.3f}",
+                    f"{world.y:.3f}",
+                ]
+                for col, text in enumerate(values):
+                    item = QTableWidgetItem(text)
+                    item.setData(self._FRAME_ROLE, mark.frame)
+                    self.setItem(row, col, item)
+                self._set_mutation_cells(row, mark, world, mutations)
+                row += 1
+                if mark.frame in gap_after_frames:
+                    self._insert_gap_row(row, len(mutations))
+                    row += 1
+            if marks and at_bottom:
+                target_row = self._last_data_row()
+                if target_row is not None:
+                    self.scrollToItem(self.item(target_row, 0))
+            self._last_mark_count = len(marks)
+            self._last_mark_frame = marks[-1].frame if marks else -1
+            self._last_row_count = row
+            return
+
         self.setColumnCount(col_count)
         self.setRowCount(row_count)
         headers = list(self.HEADERS) + [m.name for m in mutations]
@@ -74,6 +121,11 @@ class DataTablePanel(QTableWidget):
             target_row = self._last_data_row()
             if target_row is not None:
                 self.scrollToItem(self.item(target_row, 0))
+        self._last_series_id = series_id
+        self._last_mutations = list(mutations)
+        self._last_mark_count = len(marks)
+        self._last_mark_frame = marks[-1].frame if marks else -1
+        self._last_row_count = row_count
 
     def _set_mutation_cells(
         self,

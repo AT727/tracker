@@ -92,3 +92,69 @@ def test_refresh_shows_err_for_invalid_formula(qtbot):
     panel.refresh(collector, CoordinatePipeline(), mutations=mutations)
 
     assert panel.item(0, 4).text() == "ERR"
+
+
+def test_incremental_refresh_appends_new_rows(qtbot):
+    panel = DataTablePanel()
+    qtbot.addWidget(panel)
+    collector = TrackingCollector()
+    pipeline = CoordinatePipeline()
+    collector.upsert_mark(0, 0.0, 10.0, 10.0)
+    collector.upsert_mark(1, 0.1, 11.0, 11.0)
+    active_series_id = collector.active_series_id
+    assert active_series_id is not None
+
+    panel.refresh(collector, pipeline, series_id=active_series_id)
+    assert panel.rowCount() == 2
+    assert panel.item(0, 0).text() == "1"
+    assert panel.item(1, 0).text() == "2"
+
+    collector.upsert_mark(2, 0.2, 12.0, 12.0)
+    panel.refresh(collector, pipeline, series_id=active_series_id)
+
+    assert panel.rowCount() == 3
+    assert panel.item(0, 0).text() == "1"
+    assert panel.item(1, 0).text() == "2"
+    assert panel.item(2, 0).text() == "3"
+    assert panel.item(2, 2).text() == "12.000"
+
+
+def test_incremental_refresh_triggers_full_rebuild_on_mutation_change(qtbot):
+    panel = DataTablePanel()
+    qtbot.addWidget(panel)
+    collector = TrackingCollector()
+    pipeline = CoordinatePipeline()
+    collector.upsert_mark(0, 0.0, 10.0, 10.0)
+
+    mutations_a = [ColumnMutation("norm_x", "x * 2")]
+    panel.refresh(collector, pipeline, mutations=mutations_a)
+    assert panel.item(0, 4).text() == "20.000"
+
+    mutations_b = [ColumnMutation("norm_x", "x * 3")]
+    panel.refresh(collector, pipeline, mutations=mutations_b)
+    assert panel.item(0, 4).text() == "30.000"
+
+
+def test_incremental_refresh_triggers_full_rebuild_on_interleaved_mark(qtbot):
+    panel = DataTablePanel()
+    qtbot.addWidget(panel)
+    collector = TrackingCollector()
+    pipeline = CoordinatePipeline()
+    collector.upsert_mark(0, 0.0, 10.0, 10.0)
+    collector.upsert_mark(5, 0.5, 15.0, 15.0)
+    collector.upsert_mark(10, 1.0, 20.0, 20.0)
+    active_series_id = collector.active_series_id
+    assert active_series_id is not None
+
+    panel.refresh(collector, pipeline, series_id=active_series_id)
+    assert panel.rowCount() == 3
+    assert panel.item(2, 0).text() == "11"
+
+    collector.upsert_mark(7, 0.7, 17.0, 17.0)
+    panel.refresh(collector, pipeline, series_id=active_series_id)
+
+    assert panel.rowCount() == 4
+    assert panel.item(0, 0).text() == "1"
+    assert panel.item(1, 0).text() == "6"
+    assert panel.item(2, 0).text() == "8"
+    assert panel.item(3, 0).text() == "11"
